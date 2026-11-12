@@ -4,6 +4,12 @@ Python plugin for OrcaSlicer 2.5.x, tracked by [BIZ-151](https://linear.app/devi
 
 This repository is the plugin workspace. The Themis backend remains in its own repository.
 
+Repository: [mgomezdev/themis-orca-plugin](https://github.com/mgomezdev/themis-orca-plugin).
+
+The first BIZ-379 slice provides a development wheel, host-managed URL/API-key settings,
+a connection-test Script action, and a tested read-only API client. The docked send panel
+and plate sending are pending; see [the roadmap](docs/roadmap.md).
+
 ## Branches
 
 - `main`: release history.
