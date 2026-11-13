@@ -17,7 +17,9 @@ are rejected. Cancellation discards the old result and stops further requests af
 
 Orca runs Script actions on a host-owned worker; opening/showing the host panel marshals to its UI thread.
 Panel `on_message` callbacks run on the UI thread and use the separate background refresh helper for HTTP requests.
-They never join that worker. The panel displays counts and per-collection errors after a refresh. Sending remains pending.
+They never join that worker. The panel displays counts and per-collection errors after a refresh.
+The [send form](send-workflows.md) supports plate jobs and plate/object imports into new or existing projects, with
+eligibility, process presets, curated overrides, quantities and filament rules. Jobs use geometry; G-code capture remains pending.
 Do not treat this development wheel as a production release. Plugin loading and network prompts still need verification inside Orca 2.5.0.
 See [the pinned reference review and verification record](orca-2.5-reference.md) for official examples and wiki discrepancies.
 
@@ -99,8 +101,9 @@ They do not prove embedded-host compatibility.
 
 Before marking BIZ-379 done: verify wheel discovery/loading in Orca 2.5.0, check reload/unload, verify actual permission prompts,
 and exercise the panel on Prepare/Preview with a real Themis endpoint. The user explicitly deferred these PC-dependent
-checks and authorized proceeding with loading assumed; they are still unverified. Sending waits for the relevant backend
-contracts in [the roadmap](roadmap.md).
+checks and authorized proceeding with loading assumed; they are still unverified. Geometry sends are implemented as
+described in [the workflow guide](send-workflows.md). G-code capture, end-to-end send idempotency/history, per-target overrides,
+printer preferences and server-side footprint eligibility still depend on the remaining [roadmap](roadmap.md) contracts.
 
 ## Orca API references
 

@@ -3,11 +3,16 @@
 import json
 from importlib.resources import files
 from threading import Lock
+from pathlib import Path
+from uuid import uuid4
 
 import orca
 
 from .refresh import BackgroundRefresh
 from .settings import Settings, api_base_url
+from .send import BackgroundSend
+from .snapshot import inspect_snapshot
+from .workflow import build_plan, WorkflowError
 
 
 class PanelError(Exception):
@@ -31,6 +36,11 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         self.notice = ""
         self._generation = 0
         self._open_lock = Lock()
+        self.sender = BackgroundSend()
+        self.snapshot = None
+        self.connection = None
+        self.send_attempted = False
+        self.send_result = None
 
     def get_name(self):
         # Preserve the identity used by existing host-stored configuration.
@@ -97,11 +107,19 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             }
         return {
             "type": "state", "url": url, "key_set": bool(config.get("api_key")),
-            "configured": configured, "plate_index": plate, "busy": self.refresh.busy,
+            "configured": configured, "plate_index": plate, "busy": self.refresh.busy or self.sender.busy,
             "status": ("Connection configured. Test the connection to load available data."
                        if configured and self.status == "Configure your connection to get started." else self.status),
             "notice": self.notice, "counts": counts,
             "errors": self.references.errors if self.references else {}, "settings_saved": settings_saved,
+            "send_busy": self.sender.busy, "send_attempted": self.send_attempted, "send_result": self.send_result,
+            "snapshot": ({"plate_number": self.snapshot.plate_number, "objects": self.snapshot.objects} if self.snapshot else None),
+            "choices": ({
+                "projects": [{"id": p.get("id"), "name": p.get("name", "Unnamed project")} for p in self.references.projects],
+                "printers": [{"id": p.get("id"), "name": p.get("name", "Unnamed printer")} for p in self.references.printers],
+                "models": [{"id": m.get("id"), "name": m.get("display_name", "Unnamed model")} for m in self.references.models],
+                "processes": [p.get("name", "") for p in self.references.catalog.get("process", [])],
+            } if self.references else None),
         }
 
     def on_message(self, data, generation):
@@ -112,6 +130,8 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             if not isinstance(data, dict):
                 raise PanelError("Themis received an invalid panel message. Reopen the panel.")
             command = data.get("command")
+            if self.sender.busy and command not in {"ready", "poll"}:
+                raise PanelError("A send is in progress. Wait for its result before changing this panel.")
             if command == "save":
                 if self.refresh.busy:
                     raise PanelError("Wait for the current refresh to finish before changing settings.")
@@ -125,6 +145,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                     raise PanelError("Orca could not save the settings. Check write access and retry.")
                 self.refresh.cancel()
                 self.references = None
+                self.connection = None
                 self.status = "Settings saved. Test the connection to load available data."
                 self.notice = ""
                 saved = True
@@ -137,6 +158,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                     raise PanelError("Orca could not remove the stored key. Retry in the Config tab.")
                 self.refresh.cancel()
                 self.references = None
+                self.connection = None
                 self.status = "API key removed. Enter a key in Connection settings to reconnect."
                 self.notice = ""
                 saved = True
@@ -144,6 +166,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 settings = _settings(self.get_config())
                 if self.refresh.start(settings):
                     self.references = None
+                    self.connection = None
                     self.status = "Connecting to Themis and loading reference data…"
                     self.notice = ""
             elif command == "cancel":
@@ -154,11 +177,54 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 result = self.refresh.poll()
                 if result is not None:
                     self.references = result.references
+                    self.connection = result.connection
                     self.status = result.error or result.connection.message()
                     self.notice = ""
+                sent = self.sender.poll()
+                if sent is not None:
+                    self.send_result = sent
+                    self.status = sent["message"]
+            elif command == "inspect":
+                if self.refresh.busy:
+                    raise PanelError("Wait for the connection refresh before inspecting the plate.")
+                plate = orca.host.model().current_plate_index()
+                if not isinstance(plate, int) or isinstance(plate, bool) or plate < 0:
+                    raise PanelError("Open a plate in Prepare or Preview before inspecting it.")
+                path = Path(orca.host.plugin.storage()) / ("orca-plate-" + uuid4().hex + ".3mf")
+                try:
+                    orca.host.plater().export_3mf_copy(str(path))
+                    snapshot = inspect_snapshot(path, plate + 1)
+                except WorkflowError:
+                    path.unlink(missing_ok=True)
+                    raise
+                except Exception:
+                    path.unlink(missing_ok=True)
+                    raise PanelError("Orca could not export the plate. Open Prepare/Preview, allow access to the plugin data folder, and inspect again.") from None
+                if self.snapshot is not None:
+                    self.snapshot.path.unlink(missing_ok=True)
+                self.snapshot = snapshot
+                self.send_attempted = False
+                self.send_result = None
+                self.notice = "Plate copy inspected. Review the destination and settings before sending."
+            elif command == "send":
+                if self.refresh.busy or self.snapshot is None or self.references is None or self.connection is None:
+                    raise PanelError("Refresh Themis data and inspect the current plate before sending.")
+                if self.send_attempted:
+                    raise PanelError("This plate copy was already submitted. Check Themis before inspecting and sending another copy.")
+                if orca.host.model().current_plate_index() + 1 != self.snapshot.plate_number:
+                    raise PanelError("The selected plate changed. Inspect the current plate again before sending.")
+                plan = build_plan(data.get("workflow"), self.snapshot, self.references)
+                scopes = {"files:write", "jobs:write" if plan.action == "job" else "projects:write"}
+                missing = scopes.intersection(self.connection.missing_scopes)
+                if missing:
+                    raise PanelError("Enable these API key scopes before sending: " + ", ".join(sorted(missing)))
+                if self.sender.start(_settings(self.get_config()), self.snapshot, plan):
+                    self.send_attempted = True
+                    self.status = "Sending the inspected plate copy to Themis…"
+                    self.notice = "Do not repeat this send if the connection is interrupted; inspect Themis first."
             elif command != "ready":
                 raise PanelError("Unknown panel action. Reopen the Themis panel.")
-        except PanelError as exc:
+        except (PanelError, WorkflowError) as exc:
             self.notice = str(exc)
         except Exception:
             # Host callbacks are logged if they escape. Never expose raw config,

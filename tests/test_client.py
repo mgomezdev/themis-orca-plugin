@@ -16,6 +16,7 @@ def server():
         payload = {"role": "staff", "local": False, "scopes": sorted(REFERENCE_SCOPES | SEND_SCOPES)}
         seen = []
         routes = {}
+        writes = []
 
         def log_message(self, *args):
             pass
@@ -30,6 +31,13 @@ def server():
             payload = self.routes.get(self.path, self.payload)
             data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
             self.wfile.write(data)
+
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers["Content-Length"]))
+            self.writes.append((self.command, self.path, dict(self.headers), body))
+            self.do_GET()
+
+        do_PATCH = do_POST
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     worker = Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
@@ -164,3 +172,56 @@ def test_background_refresh_with_no_read_scopes_requests_only_identity(server):
     assert result.error is None
     assert set(result.references.errors) == {"models", "printers", "projects", "catalog"}
     assert handler.seen == [("/api/v1/auth/me", "private-test-key")]
+
+
+def test_json_write_and_multipart_upload_preserve_payload_bytes(server, tmp_path):
+    from email.parser import BytesParser
+    from email.policy import default
+
+    handler, client = server
+    handler.payload = {"id": 9}
+    client.write_json("POST", "/projects", {"name": "Project"}, idempotency_key="send-uuid")
+    method, path, headers, body = handler.writes[-1]
+    assert (method, path) == ("POST", "/api/v1/projects")
+    assert headers["Idempotency-Key"] == "send-uuid"
+    assert json.loads(body) == {"name": "Project"}
+    contents = bytes(range(256)) * 700
+    artifact = tmp_path / "export.3mf"
+    artifact.write_bytes(contents)
+    assert client.upload(artifact) == {"id": 9}
+    method, path, headers, body = handler.writes[-1]
+    assert path == "/api/v1/files/upload"
+    message = BytesParser(policy=default).parsebytes(('Content-Type: ' + headers["Content-Type"] + '\r\nMIME-Version: 1.0\r\n\r\n').encode() + body)
+    part = list(message.iter_parts())[0]
+    assert part.get_param("name", header="content-disposition") == "file"
+    assert part.get_payload(decode=True) == contents
+
+
+def test_unreadable_write_response_is_not_safe_to_retry(server):
+    from themis_orca.client import MutationUncertain
+    handler, client = server
+    handler.payload = b"not-json"
+    with pytest.raises(MutationUncertain, match="Check Themis"):
+        client.write_json("POST", "/jobs", {"uploaded_file_id": 1})
+    assert len(handler.writes) == 1
+
+
+def test_project_override_schema_check_uses_deployment_root(server):
+    handler, client = server
+    handler.routes = {"/openapi.json": {"components": {"schemas": {"GroupPatch": {"properties": {"overrides": {}}}}}}}
+    assert client.supports_project_overrides()
+    assert handler.seen[-1][0] == "/openapi.json"
+    handler.routes["/openapi.json"] = {"components": {"schemas": {"GroupPatch": {"properties": {}}}}}
+    assert not client.supports_project_overrides()
+
+
+def test_interrupted_write_is_uncertain_and_is_never_retried(monkeypatch):
+    from unittest.mock import Mock
+    from themis_orca.client import MutationUncertain
+    client = ThemisClient(Settings("https://themis.test/api/v1", "private-key"))
+    fail = Mock(side_effect=URLError("private-key"))
+    monkeypatch.setattr(client._opener, "open", fail)
+    with pytest.raises(MutationUncertain) as exc:
+        client.write_json("POST", "/jobs", {"uploaded_file_id": 10})
+    assert "private-key" not in str(exc.value)
+    assert fail.call_count == 1

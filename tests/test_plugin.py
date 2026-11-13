@@ -15,7 +15,8 @@ from themis_orca.refresh import RefreshResult
 
 
 @pytest.fixture
-def adapter(monkeypatch):
+def adapter(monkeypatch, tmp_path):
+    from zipfile import ZipFile
     class Capability:
         raw_config = '{"url":"http://themis.test","api_key":"private-key"}'
 
@@ -64,13 +65,35 @@ def adapter(monkeypatch):
             self.cancellations += 1
             self.result = None
 
+    class Sender:
+        busy = False
+        starts = 0
+        result = None
+
+        def start(self, settings, snapshot, plan):
+            self.starts += 1
+            self.plan = plan
+            self.busy = True
+            return True
+
+        def poll(self):
+            result, self.result = self.result, None
+            return result
+
+    def export(path):
+        with ZipFile(path, "w") as z:
+            z.writestr("Metadata/model_settings.config", '<config><object id="17"><metadata key="name" value="Part"/></object>'
+                '<plate><metadata key="plater_id" value="3"/><model_instance><metadata key="object_id" value="17"/>'
+                '<metadata key="instance_id" value="0"/></model_instance></plate></config>')
+
     registrations = []
     create = Mock(side_effect=lambda **kwargs: Panel(**kwargs))
     model = SimpleNamespace(current_plate_index=Mock(return_value=2))
     host = SimpleNamespace(
         base=object, plugin=lambda cls: cls,
         script=SimpleNamespace(ScriptPluginCapabilityBase=Capability),
-        host=SimpleNamespace(ui=SimpleNamespace(create_dock_panel=create), model=Mock(return_value=model)),
+        host=SimpleNamespace(ui=SimpleNamespace(create_dock_panel=create), model=Mock(return_value=model),
+                             plugin=SimpleNamespace(storage=lambda: str(tmp_path)), plater=lambda: SimpleNamespace(export_3mf_copy=export)),
         request_permissions=Mock(), register_capability=registrations.append,
         ExecutionResult=SimpleNamespace(success=lambda message: ("success", message)),
     )
@@ -78,6 +101,7 @@ def adapter(monkeypatch):
     monkeypatch.delitem(sys.modules, "themis_orca.plugin", raising=False)
     plugin = importlib.import_module("themis_orca.plugin")
     monkeypatch.setattr(plugin, "BackgroundRefresh", Refresh)
+    monkeypatch.setattr(plugin, "BackgroundSend", Sender)
     return SimpleNamespace(plugin=plugin, script=plugin.TestConnection(), host=host, create=create, registrations=registrations, model=model)
 
 
@@ -266,3 +290,46 @@ def test_arbitrary_host_exceptions_cannot_expose_key(adapter, monkeypatch):
     send({"command": "save", "url": "https://other.test", "api_key": ""})
     assert "could not complete" in panel.posts[-1]["notice"]
     assert "private-key" not in json.dumps(panel.posts)
+
+
+def test_inspect_export_and_send_are_explicit_and_use_frozen_plate_copy(adapter):
+    panel, send = opened(adapter)
+    send({"command": "inspect"})
+    state = panel.posts[-1]
+    assert state["snapshot"]["plate_number"] == 3
+    assert state["snapshot"]["objects"][0]["id"] == "17"
+    assert "path" not in state["snapshot"]
+    script = adapter.script
+    script.references = References(projects=[{"id": 7}])
+    script.connection = Connection("staff", False, ())
+    send({"command": "send", "workflow": {"action": "existing_objects", "project_id": 7, "object_ids": ["17"]}})
+    assert script.sender.starts == 1
+    assert script.sender.plan.objects == (("17", 1),)
+    assert panel.posts[-1]["send_busy"]
+    send({"command": "send", "workflow": {"action": "job"}})
+    assert script.sender.starts == 1
+    script.sender.busy = False
+    script.sender.result = {"ok": True, "message": "Done", "created": {"project_id": 7, "item_ids": [30]}}
+    send({"command": "poll"})
+    assert panel.posts[-1]["send_result"]["created"]["item_ids"] == [30]
+    send({"command": "send", "workflow": {"action": "job"}})
+    assert script.sender.starts == 1
+    assert "already submitted" in panel.posts[-1]["notice"]
+
+
+def test_send_blocks_changed_plate_missing_scopes_and_preserves_project_overrides(adapter):
+    panel, send = opened(adapter)
+    send({"command": "inspect"})
+    script = adapter.script
+    script.references = References()
+    script.connection = Connection("staff", False, ("files:write",))
+    send({"command": "send", "workflow": {"action": "job"}})
+    assert "files:write" in panel.posts[-1]["notice"]
+    script.connection = Connection("staff", False, ())
+    adapter.model.current_plate_index.return_value = 1
+    send({"command": "send", "workflow": {"action": "job"}})
+    assert "plate changed" in panel.posts[-1]["notice"]
+    adapter.model.current_plate_index.return_value = 2
+    send({"command": "send", "workflow": {"action": "new_plate", "project_name": "P", "overrides": {"wall_loops": 3}}})
+    assert script.sender.starts == 1
+    assert script.sender.plan.group_payload()["overrides"] == {"wall_loops": "3"}

@@ -68,4 +68,6 @@ run with missing settings, reload it, then test an explicitly configured Themis 
 The 78 tests and wheel smoke tests recorded above do not substitute for those embedded-host checks. The wheel checked
 at that time had no docked panel or send action. The subsequent panel implementation has automated adapter/page tests
 and browser previews; its actual host loading, permissions and rendering remain pending. The user explicitly authorized
-continuing with host loading assumed until they can return to the PC. Sending is still not implemented.
+continuing with host loading assumed until they can return to the PC. The subsequent [geometry send workflows](send-workflows.md)
+now create jobs or project plate/object items; G-code capture and send-history updates remain pending. Their in-app export and
+live Themis execution also remain unverified until that deferred host check.
