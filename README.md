@@ -9,7 +9,9 @@ Repository: [mgomezdev/themis-orca-plugin](https://github.com/mgomezdev/themis-o
 The BIZ-379 development wheel provides a docked Themis panel with masked URL/API-key settings,
 connection testing, current-plate display, and background reference-data loading. The [send workflow](docs/send-workflows.md)
 creates geometry jobs or imports plates/objects into new/existing projects with printer, process and filament settings.
-See [the roadmap](docs/roadmap.md) for remaining G-code/history/eligibility work. Actual Orca host verification is deferred.
+It also captures raw sliced G-code for new/existing projects and automatically sets file eligibility and matching
+physical printers from the export-time machine profile. See [the G-code instructions](docs/send-workflows.md#sliced-g-code-project-imports)
+and [the roadmap](docs/roadmap.md) for remaining archive/history/eligibility work. Actual Orca host verification is deferred.
 
 ## Branches
 

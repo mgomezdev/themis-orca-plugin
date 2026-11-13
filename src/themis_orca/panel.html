@@ -38,9 +38,11 @@
 </div>
 <section aria-labelledby="send-heading">
   <h2 id="send-heading">Send to Themis</h2>
-  <button id="inspect" type="button">Inspect current plate</button>
-  <p id="snapshot-note" class="muted">Inspect a copy of the plate before choosing what to send.</p>
-  <p class="muted">Orca exports the full project archive. Only the chosen plate or objects become jobs/items; other plates remain in the uploaded library file.</p>
+  <div id="geometry-source">
+    <button id="inspect" type="button">Inspect current plate</button>
+    <p id="snapshot-note" class="muted">Inspect a copy of the plate before choosing what to send.</p>
+    <p class="muted">Orca exports the full project archive. Only the chosen plate or objects become jobs/items; other plates remain in the uploaded library file.</p>
+  </div>
   <form id="send-form">
     <label>Action<select id="action">
       <option value="job">Create a job for this plate</option>
@@ -48,12 +50,22 @@
       <option value="existing_objects">Add objects to an existing project</option>
       <option value="new_plate">Add plate to a new project</option>
       <option value="new_objects">Add objects to a new project</option>
+      <option value="existing_gcode">Add sliced G-code to an existing project</option>
+      <option value="new_gcode">Add sliced G-code to a new project</option>
     </select></label>
+    <div id="gcode-source" class="fields" hidden>
+      <label>Captured G-code export<select id="capture-id" aria-describedby="gcode-note"></select></label>
+      <p class="muted">Select Themis: Capture G-code in the process preset's slicing pipeline plugins, place it last, then export G-code. Capture stays local until you send it here. Choose the export by name; it may belong to a different plate than the current view.</p>
+      <p class="muted">This captures raw .gcode. Printers that require a sliced .gcode.3mf archive cannot print this format through Themis.</p>
+      <p id="gcode-note" role="status" aria-live="polite"></p>
+      <p id="capture-error" role="status" aria-live="polite"></p>
+      <button id="clear-captures" type="button" class="quiet">Clear captured exports</button>
+    </div>
     <label id="project-row" hidden>Existing project<select id="project-id"></select></label>
     <label id="name-row" hidden>New project name<input id="project-name" maxlength="255"></label>
     <label id="objects-row" hidden>Objects from the inspected plate<select id="object-ids" multiple aria-describedby="snapshot-note"></select></label>
     <label>Quantity<input id="quantity" type="number" min="1" max="10000" value="1"></label>
-    <details><summary>Printer and slicing settings</summary><div class="fields">
+    <details id="geometry-settings"><summary>Printer and slicing settings</summary><div class="fields">
       <label>Eligible printers and models<select id="targets" multiple></select></label>
       <p class="muted">Choose Any printer alone, or specific printers/models. Project imports get their own print group; earlier items keep their settings.</p>
       <label>Process preset<select id="process"></select></label>
@@ -99,6 +111,7 @@
   let latestState = {};
   let choicesKey = '';
   let snapshotKey = '';
+  let capturesKey = '';
   el('action').value = 'job';
   el('quantity').value = '1';
   const send = command => orca.postMessage({command});
@@ -116,6 +129,14 @@
   function controls() {
     const action = el('action').value;
     const job = action === 'job';
+    const gcode = action.endsWith('gcode');
+    const capture = (latestState.captures || []).find(c => c.id === el('capture-id').value);
+    el('geometry-source').hidden = gcode;
+    el('geometry-settings').hidden = gcode;
+    el('gcode-source').hidden = !gcode;
+    el('gcode-note').textContent = capture ? (capture.error || `Printer profile: ${capture.profile}. Eligible printers: ${(capture.printers || []).join(', ')}. Model: ${capture.model}.`)
+      + (capture.attempted ? ' This export was already submitted. Check Themis for its result.' : ' G-code is added as-is; slicing settings are already baked in.') : 'No export selected. Capture an export before sending.';
+    el('send').textContent = gcode ? 'Send captured G-code' : 'Send inspected copy';
     el('project-row').hidden = !action.startsWith('existing');
     el('name-row').hidden = !action.startsWith('new');
     el('objects-row').hidden = !action.endsWith('objects');
@@ -124,7 +145,8 @@
     el('filament-fields').hidden = !el('use-filament').checked;
     el('overrides-row').hidden = !el('use-overrides').checked;
     el('override-note').textContent = (job ? 'Applies to this job. ' : 'Applies to this import group and its future jobs; earlier project items keep their settings. ') + 'Supported keys: layer_height, wall_loops, top_shell_layers, bottom_shell_layers, sparse_infill_density, sparse_infill_pattern, enable_support, support_type, support_threshold_angle, support_on_build_plate_only, raft_layers, brim_type, brim_width, ironing_type.';
-    el('send').disabled = !!latestState.busy || !latestState.snapshot || !latestState.choices || !latestState.configured || !!latestState.send_attempted;
+    el('send').disabled = !!latestState.busy || !latestState.choices || !latestState.configured
+      || (gcode ? !capture || !!capture.error || !!capture.attempted : !latestState.snapshot || !!latestState.send_attempted);
   }
   function render(state) {
     latestState = state;
@@ -176,6 +198,18 @@
     }
     el('snapshot-note').textContent = state.snapshot ? `Inspected plate ${state.snapshot.plate_number}: ${state.snapshot.objects.length} object(s). This copy will be sent; inspect again after edits.` : 'Inspect a copy of the plate before choosing what to send.';
     el('inspect').disabled = !!state.busy;
+    const captures = state.captures || [];
+    const nextCaptures = JSON.stringify(captures);
+    if (nextCaptures !== capturesKey) {
+      capturesKey = nextCaptures;
+      const previousCapture = el('capture-id').value;
+      options('capture-id', [['', 'Choose an export'], ...captures.map(c => [c.id, `${c.name} (${c.profile || 'unknown profile'})`])]);
+      // Preserve explicit selection on polls; require a choice even for the first export.
+      el('capture-id').value = captures.some(c => c.id === previousCapture) ? previousCapture : '';
+    }
+    el('capture-id').disabled = !!state.busy;
+    el('clear-captures').disabled = !!state.busy || !captures.length;
+    el('capture-error').textContent = state.capture_error || '';
     for (const id of ['action','project-id','project-name','object-ids','targets','process','use-filament','filament-type','filament-subtype','filament-color','filament-manufacturer','use-overrides','overrides']) el(id).disabled = !!state.busy;
     const created = state.send_result ? state.send_result.created || {} : {};
     const records = [];
@@ -197,9 +231,15 @@
   el('cancel').addEventListener('click', () => send('cancel'));
   el('forget').addEventListener('click', () => send('forget'));
   el('inspect').addEventListener('click', () => send('inspect'));
-  for (const id of ['action','use-filament','use-overrides']) el(id).addEventListener('change', controls);
+  el('clear-captures').addEventListener('click', () => send('clear_captures'));
+  for (const id of ['action','capture-id','use-filament','use-overrides']) el(id).addEventListener('change', controls);
   el('send-form').addEventListener('submit', event => {
     event.preventDefault();
+    if (el('action').value.endsWith('gcode')) {
+      orca.postMessage({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
+        project_name:el('project-name').value, capture_id:el('capture-id').value, quantity:el('quantity').value}});
+      return;
+    }
     let overrides = {};
     if (el('use-overrides').checked) {
       try { overrides = JSON.parse(el('overrides').value || '{}'); }

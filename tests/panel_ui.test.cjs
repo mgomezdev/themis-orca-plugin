@@ -119,3 +119,29 @@ test('project overrides stay selected and explain their import-group scope', () 
   assert.equal(p.elements.overrides.value, '{"wall_loops":3}');
   assert.match(p.elements['override-note'].textContent, /import group/);
 });
+
+test('sliced G-code destinations require a captured export with proven automatic eligibility', () => {
+  const p = page();
+  const capture = {id:'slice-1',name:'part.gcode',profile:'Printer 0.4 nozzle',model:'Printer',printers:['P'],error:'',attempted:false};
+  const state = {choices:{projects:[{id:7,name:'P'}],printers:[],models:[],processes:[]},captures:[capture]};
+  p.state(state);
+  for (const action of ['existing_gcode','new_gcode']) {
+    p.elements.action.value = action; p.elements.action.fire('change');
+    assert.equal(p.elements['geometry-source'].hidden, true);
+    assert.equal(p.elements['geometry-settings'].hidden, true);
+    assert.equal(p.elements['gcode-source'].hidden, false);
+    assert.equal(p.elements['project-row'].hidden, !action.startsWith('existing'));
+    assert.equal(p.elements['name-row'].hidden, !action.startsWith('new'));
+    assert.equal(p.elements.send.disabled, true);
+  }
+  p.elements['capture-id'].value = 'slice-1'; p.elements['capture-id'].fire('change');
+  assert.equal(p.elements.send.disabled, false);
+  assert.match(p.elements['gcode-note'].textContent, /Eligible printers: P/);
+  p.elements['use-overrides'].checked = true; p.elements.overrides.value = 'invalid json from previous geometry action';
+  p.elements['project-name'].value = 'Sliced'; p.elements['send-form'].fire('submit');
+  assert.deepEqual(p.messages.at(-1), {command:'send',workflow:{action:'new_gcode',project_id:'',project_name:'Sliced',capture_id:'slice-1',quantity:'1'}});
+  p.state(state); assert.equal(p.elements['capture-id'].value, 'slice-1');
+  p.state({...state,captures:[{...capture,error:'No unique mapping'}]}); assert.equal(p.elements.send.disabled,true);
+  p.state({...state,captures:[{...capture,attempted:true}]}); assert.equal(p.elements.send.disabled,true);
+  p.elements['clear-captures'].fire('click'); assert.deepEqual(p.messages.at(-1),{command:'clear_captures'});
+});

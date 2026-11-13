@@ -92,6 +92,7 @@ def adapter(monkeypatch, tmp_path):
     host = SimpleNamespace(
         base=object, plugin=lambda cls: cls,
         script=SimpleNamespace(ScriptPluginCapabilityBase=Capability),
+        slicing=SimpleNamespace(SlicingPipelineCapabilityBase=Capability, Step=SimpleNamespace(psGCodePostProcess="export")),
         host=SimpleNamespace(ui=SimpleNamespace(create_dock_panel=create), model=Mock(return_value=model),
                              plugin=SimpleNamespace(storage=lambda: str(tmp_path)), plater=lambda: SimpleNamespace(export_3mf_copy=export)),
         request_permissions=Mock(), register_capability=registrations.append,
@@ -113,10 +114,108 @@ def opened(adapter):
 
 def test_registration_preserves_identity_and_requests_only_thread_permission(adapter):
     adapter.plugin.ThemisPlugin().register_capabilities()
-    assert adapter.registrations == [adapter.plugin.TestConnection]
+    assert adapter.registrations == [adapter.plugin.TestConnection, adapter.plugin.CaptureGCode]
     adapter.host.request_permissions.assert_called_once_with(threading=True)
     assert adapter.script.get_name() == "Themis: Test connection"
     assert adapter.script.get_default_config() == {"url": "", "api_key": ""}
+
+
+def test_export_hook_captures_export_time_profile_and_bytes_without_ui_or_network(adapter, tmp_path):
+    source = tmp_path / "export.gcode"
+    source.write_bytes(b"; sliced\r\nG28\r\n")
+    ctx = SimpleNamespace(step="export", gcode_path=str(source), output_name="part.gcode",
+                          config_value=Mock(return_value="Printer 0.4 nozzle"))
+    result = adapter.plugin.CaptureGCode().execute(ctx)
+    assert "captured" in result[1]
+    ctx.config_value.assert_called_once_with("printer_settings_id")
+    [(row, attempted)] = adapter.plugin._captures.entries()
+    assert row.profile == "Printer 0.4 nozzle" and not attempted
+    assert row.path.read_bytes() == source.read_bytes()
+    adapter.create.assert_not_called()
+    adapter.host.host.model.assert_not_called()
+    assert adapter.script.sender.starts == 0
+    # Other slicing seams must not read paths, config, UI, or live graph handles.
+    adapter.plugin.CaptureGCode().execute(SimpleNamespace(step="geometry"))
+    assert len(adapter.plugin._captures.entries()) == 1
+
+
+def test_capture_failure_is_safe_and_does_not_break_export(adapter):
+    result = adapter.plugin.CaptureGCode().execute(SimpleNamespace(step="export", gcode_path="missing-private-path",
+        output_name="part.gcode", config_value=lambda _: "P"))
+    assert result[0] == "success"
+    panel, send = opened(adapter)
+    send({"command": "ready"})
+    assert "capture failed" in panel.posts[-1]["capture_error"]
+    assert "missing-private-path" not in json.dumps(panel.posts[-1])
+
+
+def test_gcode_send_uses_capture_without_reading_current_plate_and_cannot_repeat(adapter, tmp_path):
+    from test_gcode import references, PROFILE
+    script = adapter.script
+    script.references = references()
+    script.connection = Connection("staff", False, ())
+    source = tmp_path / "export.gcode"
+    source.write_bytes(b"G28\n")
+    row = adapter.plugin._captures.capture(source, tmp_path / "storage", "part.gcode", PROFILE)
+    panel, send = opened(adapter)
+    adapter.model.current_plate_index.side_effect = RuntimeError("no current plate")
+    send({"command": "send", "workflow": {"action": "new_gcode", "project_name": "Sliced", "capture_id": row.token}})
+    assert script.sender.starts == 1
+    assert script.sender.plan.target_keys == ("5",)
+    assert panel.posts[-1]["plate_index"] is None
+    assert panel.posts[-1]["captures"][0]["printers"] == ["P"]
+    assert str(row.path) not in json.dumps(panel.posts[-1])
+    send({"command": "clear_captures"})
+    assert row.path.exists() and "in progress" in panel.posts[-1]["notice"]
+    script.sender.busy = False
+    script.sender.result = {"ok": True, "message": "Added.", "created": {"project_id": 7, "item_ids": [30]}}
+    send({"command": "poll"})
+    assert script.gcode_inflight is None
+    send({"command": "send", "workflow": {"action": "new_gcode", "project_name": "Sliced", "capture_id": row.token}})
+    assert script.sender.starts == 1
+    assert "already submitted" in panel.posts[-1]["notice"]
+    send({"command": "clear_captures"})
+    assert panel.posts[-1]["captures"] == [] and not row.path.exists()
+    assert source.exists()
+
+
+def test_gcode_validation_failure_releases_capture_for_corrected_retry(adapter, tmp_path):
+    from test_gcode import references, PROFILE
+    script = adapter.script
+    script.references = references()
+    script.references.mappings = {}
+    script.connection = Connection("staff", False, ())
+    source = tmp_path / "export.gcode"
+    source.write_bytes(b"G28\n")
+    row = adapter.plugin._captures.capture(source, tmp_path / "storage", "part.gcode", PROFILE)
+    panel, send = opened(adapter)
+    request = {"command": "send", "workflow": {"action": "existing_gcode", "project_id": 7, "capture_id": row.token}}
+    send(request)
+    assert script.sender.starts == 0 and "No unique" in panel.posts[-1]["notice"]
+    script.references = references()
+    send(request)
+    assert script.sender.starts == 1
+
+
+def test_gcode_requires_write_scopes_and_accepts_only_host_capture_tokens(adapter, tmp_path):
+    from test_gcode import references, PROFILE
+    script = adapter.script
+    script.references = references()
+    script.connection = Connection("staff", False, ("projects:write",))
+    source = tmp_path / "export.gcode"
+    source.write_bytes(b"G28\n")
+    row = adapter.plugin._captures.capture(source, tmp_path / "storage", "part.gcode", PROFILE)
+    panel, send = opened(adapter)
+    request = {"command": "send", "workflow": {"action": "new_gcode", "project_name": "Sliced", "capture_id": row.token}}
+    send(request)
+    assert script.sender.starts == 0 and "projects:write" in panel.posts[-1]["notice"]
+    request["workflow"]["capture_id"] = str(source)
+    script.connection = Connection("staff", False, ())
+    send(request)
+    assert script.sender.starts == 0 and "Choose a captured" in panel.posts[-1]["notice"]
+    request["workflow"]["capture_id"] = row.token
+    send(request)
+    assert script.sender.starts == 1
 
 
 def test_open_reuses_panel_without_reading_live_model_or_starting_network(adapter):

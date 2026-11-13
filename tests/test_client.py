@@ -225,3 +225,25 @@ def test_interrupted_write_is_uncertain_and_is_never_retried(monkeypatch):
         client.write_json("POST", "/jobs", {"uploaded_file_id": 10})
     assert "private-key" not in str(exc.value)
     assert fail.call_count == 1
+
+
+def test_gcode_upload_streams_original_bytes_with_model_eligibility(server, tmp_path):
+    from email.parser import BytesParser
+    from email.policy import default
+
+    handler, client = server
+    model = "cd1581c2-4208-41a9-8028-10da5f05aa80"
+    artifact = tmp_path / "working.gcode"
+    original = b"; printer_settings_id = Printer 0.4 nozzle\r\nG28\r\n" * 5000
+    artifact.write_bytes(original)
+    client.upload(artifact, gcode_model=model)
+    method, path, headers, body = handler.writes[-1]
+    assert (method, path) == ("POST", "/api/v1/files/upload")
+    assert int(headers["Content-Length"]) == len(body)
+    message = BytesParser(policy=default).parsebytes(('Content-Type: ' + headers["Content-Type"] + '\r\nMIME-Version: 1.0\r\n\r\n').encode() + body)
+    parts = {p.get_param("name", header="content-disposition"): p for p in message.iter_parts()}
+    assert parts["eligible_model_uuids"].get_payload(decode=True).decode() == model
+    assert parts["folder"].get_payload(decode=True).decode() == "/Orca G-code/" + model
+    assert parts["file"].get_filename() == "orca-slice.gcode"
+    assert parts["file"].get_payload(decode=True) == original
+    assert artifact.read_bytes() == original

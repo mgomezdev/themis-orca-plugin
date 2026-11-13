@@ -102,7 +102,8 @@ They do not prove embedded-host compatibility.
 Before marking BIZ-379 done: verify wheel discovery/loading in Orca 2.5.0, check reload/unload, verify actual permission prompts,
 and exercise the panel on Prepare/Preview with a real Themis endpoint. The user explicitly deferred these PC-dependent
 checks and authorized proceeding with loading assumed; they are still unverified. Geometry sends are implemented as
-described in [the workflow guide](send-workflows.md). G-code capture, end-to-end send idempotency/history, per-target overrides,
+described in [the workflow guide](send-workflows.md), including raw G-code capture and new/existing-project imports.
+Sliced-archive capture, direct G-code jobs, end-to-end send idempotency/history, per-target overrides,
 printer preferences and server-side footprint eligibility still depend on the remaining [roadmap](roadmap.md) contracts.
 
 ## Orca API references

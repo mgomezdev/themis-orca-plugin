@@ -13,6 +13,30 @@ from .settings import Settings, api_base_url
 from .send import BackgroundSend
 from .snapshot import inspect_snapshot
 from .workflow import build_plan, WorkflowError
+from .gcode import CaptureStore, eligible_model, eligible_printers
+
+
+_captures = CaptureStore()
+_capture_error = ""
+
+
+class CaptureGCode(orca.slicing.SlicingPipelineCapabilityBase):
+    def get_name(self):
+        return "Themis: Capture G-code"
+
+    def execute(self, ctx):
+        global _capture_error
+        if ctx.step != orca.slicing.Step.psGCodePostProcess or not ctx.gcode_path:
+            return orca.ExecutionResult.success("")
+        try:
+            # Export-time config belongs to this slice; never read the current GUI preset here.
+            _captures.capture(ctx.gcode_path, orca.host.plugin.storage(), ctx.output_name,
+                              ctx.config_value("printer_settings_id"))
+            _capture_error = ""
+            return orca.ExecutionResult.success("Themis captured this G-code export locally. Send it from the Themis panel.")
+        except Exception:
+            _capture_error = "G-code capture failed. Allow access to the exported file and plugin data folder, then export again."
+            return orca.ExecutionResult.success("Themis could not capture this export. See the Themis panel.")
 
 
 class PanelError(Exception):
@@ -41,6 +65,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         self.connection = None
         self.send_attempted = False
         self.send_result = None
+        self.gcode_inflight = None
 
     def get_name(self):
         # Preserve the identity used by existing host-stored configuration.
@@ -96,6 +121,20 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         except RuntimeError:
             plate = None
         counts = None
+        captures = []
+        for row, attempted in _captures.entries():
+            model, error = None, "Refresh Themis data to match the exported printer profile."
+            printers = []
+            if self.references is not None:
+                try:
+                    model_id = eligible_model(row, self.references)
+                    model = next(m.get("display_name", "Matched printer model") for m in self.references.models if m.get("id") == model_id)
+                    printers = [p.get("name", "Unnamed printer") for p in eligible_printers(row, self.references, model_id)]
+                    error = ""
+                except WorkflowError as exc:
+                    error = str(exc)
+            captures.append({"id": row.token, "name": row.name, "profile": row.profile,
+                             "model": model, "printers": printers, "error": error, "attempted": attempted})
         if self.references is not None:
             data = self.references
             counts = {
@@ -113,6 +152,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             "notice": self.notice, "counts": counts,
             "errors": self.references.errors if self.references else {}, "settings_saved": settings_saved,
             "send_busy": self.sender.busy, "send_attempted": self.send_attempted, "send_result": self.send_result,
+            "captures": captures, "capture_error": _capture_error,
             "snapshot": ({"plate_number": self.snapshot.plate_number, "objects": self.snapshot.objects} if self.snapshot else None),
             "choices": ({
                 "projects": [{"id": p.get("id"), "name": p.get("name", "Unnamed project")} for p in self.references.projects],
@@ -173,6 +213,9 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 self.refresh.cancel()
                 self.status = "Refresh cancelled. Any current request will finish before you can refresh again."
                 self.notice = ""
+            elif command == "clear_captures":
+                _captures.clear()
+                self.notice = "Local captured exports cleared. Files already sent to Themis are retained there."
             elif command == "poll":
                 result = self.refresh.poll()
                 if result is not None:
@@ -182,6 +225,9 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                     self.notice = ""
                 sent = self.sender.poll()
                 if sent is not None:
+                    if self.gcode_inflight is not None:
+                        _captures.release(self.gcode_inflight)
+                        self.gcode_inflight = None
                     self.send_result = sent
                     self.status = sent["message"]
             elif command == "inspect":
@@ -207,21 +253,39 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 self.send_result = None
                 self.notice = "Plate copy inspected. Review the destination and settings before sending."
             elif command == "send":
-                if self.refresh.busy or self.snapshot is None or self.references is None or self.connection is None:
-                    raise PanelError("Refresh Themis data and inspect the current plate before sending.")
-                if self.send_attempted:
+                workflow = data.get("workflow")
+                gcode = isinstance(workflow, dict) and workflow.get("action") in {"existing_gcode", "new_gcode"}
+                if self.refresh.busy or self.references is None or self.connection is None:
+                    raise PanelError("Refresh Themis data before sending.")
+                if self.gcode_inflight is not None or (self.send_attempted and self.send_result is None):
+                    raise PanelError("Wait for the previous send result before starting another send.")
+                if not gcode and self.snapshot is None:
+                    raise PanelError("Inspect the current plate before sending geometry.")
+                if not gcode and self.send_attempted:
                     raise PanelError("This plate copy was already submitted. Check Themis before inspecting and sending another copy.")
-                if orca.host.model().current_plate_index() + 1 != self.snapshot.plate_number:
+                if not gcode and orca.host.model().current_plate_index() + 1 != self.snapshot.plate_number:
                     raise PanelError("The selected plate changed. Inspect the current plate again before sending.")
-                plan = build_plan(data.get("workflow"), self.snapshot, self.references)
-                scopes = {"files:write", "jobs:write" if plan.action == "job" else "projects:write"}
-                missing = scopes.intersection(self.connection.missing_scopes)
-                if missing:
-                    raise PanelError("Enable these API key scopes before sending: " + ", ".join(sorted(missing)))
-                if self.sender.start(_settings(self.get_config()), self.snapshot, plan):
-                    self.send_attempted = True
-                    self.status = "Sending the inspected plate copy to Themis…"
-                    self.notice = "Do not repeat this send if the connection is interrupted; inspect Themis first."
+                snapshot = _captures.acquire(workflow.get("capture_id")) if gcode else self.snapshot
+                started = False
+                try:
+                    plan = build_plan(workflow, snapshot, self.references)
+                    scopes = {"files:write", "jobs:write" if plan.action == "job" else "projects:write"}
+                    missing = scopes.intersection(self.connection.missing_scopes)
+                    if missing:
+                        raise PanelError("Enable these API key scopes before sending: " + ", ".join(sorted(missing)))
+                    if self.sender.start(_settings(self.get_config()), snapshot, plan):
+                        started = True
+                        self.send_result = None
+                        if gcode:
+                            self.gcode_inflight = snapshot.token
+                            _captures.mark_attempted(snapshot.token)
+                        else:
+                            self.send_attempted = True
+                        self.status = "Sending the captured G-code to Themis…" if gcode else "Sending the inspected plate copy to Themis…"
+                        self.notice = "Do not repeat this send if the connection is interrupted; inspect Themis first."
+                finally:
+                    if gcode and not started:
+                        _captures.release(snapshot.token)
             elif command != "ready":
                 raise PanelError("Unknown panel action. Reopen the Themis panel.")
         except (PanelError, WorkflowError) as exc:
@@ -247,6 +311,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         self._generation += 1
         self.refresh.cancel()
         self.panel = None
+        _captures.clear()
 
 
 @orca.plugin
@@ -256,3 +321,4 @@ class ThemisPlugin(orca.base):
         # is needed only for network work initiated by the panel's UI callbacks.
         orca.request_permissions(threading=True)
         orca.register_capability(TestConnection)
+        orca.register_capability(CaptureGCode)

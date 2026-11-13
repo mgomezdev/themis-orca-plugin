@@ -34,3 +34,20 @@ jobs:
         with:
           name: themis-orca-${{ matrix.os }}-python-${{ matrix.python-version }}
           path: dist/*.whl
+  themis-api-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check out the verified Themis API baseline
+        uses: actions/checkout@v4
+        with:
+          repository: mgomezdev/themis
+          ref: be3500c5f4c69b3a5dc3dbd6dfcb4d2a74b47e09
+          path: themis
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e 'themis/backend[dev]'
+      - name: Verify G-code project imports and fixed-job generation
+        working-directory: themis/backend
+        run: python -m pytest -c pyproject.toml -p tests.conftest ../../integration/test_themis_gcode.py -q

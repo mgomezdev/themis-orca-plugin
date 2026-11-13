@@ -17,6 +17,12 @@ curated overrides; item asks carry filament type/subtype/color/vendor. New proje
 do not automatically generate jobs. The companion Themis group-overrides extension and migration 68 must be deployed for
 project overrides; the plugin checks its schema before making any writes.
 
+Two G-code project destinations are implemented: add an export to a new or existing project. A synchronous
+post-process capability captures raw G-code unchanged, using the export-time `printer_settings_id`. Exact Laminus
+machine-profile mappings establish the file's eligible model; the import group targets registered printers with
+that model and resolved profile (including nozzle variant). The panel requires explicit export selection and send.
+Sliced `.gcode.3mf` archive capture and direct G-code job sends remain outside this increment.
+
 ## Backend dependencies (Themis repository)
 
 - BIZ-375: footprint eligibility.

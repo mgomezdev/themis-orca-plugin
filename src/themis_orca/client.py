@@ -105,12 +105,19 @@ class ThemisClient:
         except (KeyError, TypeError):
             return False
 
-    def upload(self, path):
+    def upload(self, path, *, gcode_model=None):
         from uuid import uuid4
         path = Path(path)
         boundary = "themis-" + uuid4().hex
-        prefix = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="orca-plate.3mf"\r\n'
-                  'Content-Type: model/3mf\r\n\r\n').encode()
+        filename, content_type = ("orca-slice.gcode", "text/plain") if gcode_model else ("orca-plate.3mf", "model/3mf")
+        fields = ""
+        if gcode_model:
+            gcode_model = str(UUID(gcode_model))
+            # Isolate dedup by model so setting eligibility cannot change another model's shared file.
+            for key, value in (("folder", "/Orca G-code/" + gcode_model), ("eligible_model_uuids", gcode_model)):
+                fields += f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'
+        prefix = (fields + f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                  f'Content-Type: {content_type}\r\n\r\n').encode()
         suffix = f'\r\n--{boundary}--\r\n'.encode()
 
         def chunks():
