@@ -6,9 +6,9 @@ This repository is the plugin workspace. The Themis backend remains in its own r
 
 Repository: [mgomezdev/themis-orca-plugin](https://github.com/mgomezdev/themis-orca-plugin).
 
-The first BIZ-379 slice provides a development wheel, host-managed URL/API-key settings,
-a connection-test Script action, and a tested read-only API client. The docked send panel
-and plate sending are pending; see [the roadmap](docs/roadmap.md).
+The BIZ-379 development wheel provides a docked Themis panel with masked URL/API-key settings,
+connection testing, current-plate display, and background reference-data loading. Plate sending
+is pending; see [the roadmap](docs/roadmap.md). Actual Orca host verification is deferred.
 
 ## Branches
 

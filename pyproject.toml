@@ -17,6 +17,9 @@ dev = ["pytest>=8,<10", "build>=1,<2"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+themis_orca = ["panel.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]

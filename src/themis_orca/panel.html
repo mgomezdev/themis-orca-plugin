@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Themis</title>
+<style>
+  body { margin: 0; padding: 12px; font-size: 13px; color: var(--orca-fg); background: var(--orca-bg); }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 0 0 8px; }
+  p { line-height: 1.45; margin: 4px 0 12px; overflow-wrap: anywhere; }
+  .muted { color: var(--orca-muted); }
+  section, details { margin-top: 20px; }
+  summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
+  form { display: grid; gap: 8px; margin-top: 10px; }
+  label { display: grid; gap: 5px; }
+  input { box-sizing: border-box; width: 100%; min-width: 0; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; opacity: .6; }
+  :focus-visible { outline: 2px solid var(--orca-accent); outline-offset: 2px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .quiet { background: transparent; color: var(--orca-fg); border: 1px solid var(--orca-border); }
+  dl { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 6px 12px; margin: 10px 0; }
+  dt, dd { margin: 0; } dd { font-variant-numeric: tabular-nums; }
+  ul { padding-left: 18px; line-height: 1.45; }
+  [hidden] { display: none !important; }
+</style>
+<h1>Themis</h1>
+<p id="plate" class="muted">Waiting for plate information…</p>
+<p id="status" role="status" aria-live="polite">Configure your connection to get started.</p>
+<p id="notice" role="status" aria-live="polite"></p>
+<div class="actions">
+  <button id="refresh" type="button" disabled>Test connection &amp; refresh</button>
+  <button id="cancel" type="button" class="quiet" hidden>Cancel refresh</button>
+</div>
+<details id="settings" open>
+  <summary>Connection settings</summary>
+  <form id="settings-form">
+    <label>Themis URL<input id="url" type="url" autocomplete="off" placeholder="https://themis.example.test" required></label>
+    <label>API key<input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Enter an API key"></label>
+    <p id="key-note" class="muted">Your key is stored in Orca’s plugin configuration.</p>
+    <div class="actions">
+      <button id="save" type="submit">Save settings</button>
+      <button id="forget" type="button" class="quiet" disabled>Forget API key</button>
+    </div>
+  </form>
+</details>
+<section aria-labelledby="data-heading">
+  <h2 id="data-heading">Available in Themis</h2>
+  <p id="data-note" class="muted">Test the connection to load printer models, presets, and projects.</p>
+  <dl id="counts" hidden></dl>
+  <ul id="errors" hidden aria-label="Reference data errors"></ul>
+</section>
+<section><p class="muted">Sending plates is still in development.</p></section>
+<script>
+(() => {
+  const el = id => document.getElementById(id);
+  let initialized = false;
+  let keySet = false;
+  const send = command => orca.postMessage({command});
+  function render(state) {
+    if (!initialized) {
+      el('url').value = state.url || '';
+      initialized = true;
+    }
+    keySet = !!state.key_set;
+    el('api-key').placeholder = keySet ? 'Leave blank to keep the stored key' : 'Enter an API key';
+    el('key-note').textContent = keySet ? 'A key is stored. Leave the field blank to keep it.' : 'Your key is stored in Orca’s plugin configuration.';
+    el('plate').textContent = Number.isInteger(state.plate_index) && state.plate_index >= 0 ? `Current plate: ${state.plate_index + 1}` : 'No plate is available. Open a project in Prepare or Preview.';
+    el('status').textContent = state.status;
+    el('notice').textContent = state.notice || '';
+    el('refresh').disabled = !!state.busy || !state.configured;
+    el('cancel').hidden = !state.busy;
+    for (const id of ['save', 'forget', 'url', 'api-key']) el(id).disabled = !!state.busy;
+    el('forget').disabled = !!state.busy || !keySet;
+    if (state.settings_saved) {
+      el('api-key').value = '';
+      el('url').value = state.url || '';
+    }
+    const counts = el('counts');
+    counts.replaceChildren();
+    for (const [label, count] of Object.entries(state.counts || {})) {
+      const term = document.createElement('dt'); term.textContent = label;
+      const value = document.createElement('dd'); value.textContent = String(count);
+      counts.append(term, value);
+    }
+    counts.hidden = !state.counts;
+    el('data-note').hidden = !!state.counts;
+    const errors = el('errors'); errors.replaceChildren();
+    for (const message of Object.values(state.errors || {})) {
+      const item = document.createElement('li'); item.textContent = message; errors.append(item);
+    }
+    errors.hidden = !errors.children.length;
+  }
+  orca.onMessage(message => {
+    if (message && message.type === 'state') render(message);
+  });
+  el('settings-form').addEventListener('submit', event => {
+    event.preventDefault();
+    orca.postMessage({command: 'save', url: el('url').value, api_key: el('api-key').value});
+  });
+  el('refresh').addEventListener('click', () => send('refresh'));
+  el('cancel').addEventListener('click', () => send('cancel'));
+  el('forget').addEventListener('click', () => send('forget'));
+  send('ready');
+  const timer = setInterval(() => send('poll'), 750);
+  window.addEventListener('pagehide', () => clearInterval(timer));
+})();
+</script>
+</html>

@@ -18,14 +18,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '${{ matrix.python-version }}'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - run: python -m pip install -e '.[dev]'
       - run: python -m pytest
+      - run: node --test tests/panel_ui.test.cjs
       - run: python -m build --wheel
       - name: Install and smoke-test the built wheel outside the source tree
         shell: bash
         run: |
           python -m pip install --force-reinstall --no-deps dist/*.whl
-          python -I -c "import themis_orca; from themis_orca.refresh import BackgroundRefresh; assert not BackgroundRefresh().busy"
+          python -I -c "import themis_orca; from themis_orca.refresh import BackgroundRefresh; from importlib.resources import files; assert not BackgroundRefresh().busy; assert 'Themis' in files('themis_orca').joinpath('panel.html').read_text(encoding='utf-8')"
       - uses: actions/upload-artifact@v4
         with:
           name: themis-orca-${{ matrix.os }}-python-${{ matrix.python-version }}
