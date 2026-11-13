@@ -3,6 +3,7 @@ from zipfile import ZipFile
 import pytest
 
 from themis_orca.snapshot import inspect_snapshot
+from themis_orca.snapshot import PlateSnapshot, capture_footprint
 from themis_orca.workflow import WorkflowError
 
 
@@ -32,3 +33,27 @@ def test_membership_and_ids_come_from_selected_exported_plate(tmp_path):
 def test_missing_or_invalid_membership_fails_closed(tmp_path, xml):
     with pytest.raises(WorkflowError):
         inspect_snapshot(archive(tmp_path, xml), 1)
+
+
+def test_footprint_uses_exported_identity_world_transforms_and_only_printable_parts(tmp_path):
+    from types import SimpleNamespace as NS
+    identity = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    rotate = [[0,-1,0,100],[1,0,0,100],[0,0,1,5],[0,0,0,1]]
+    part = NS(is_model_part=lambda:True, matrix=lambda:identity,
+              mesh=lambda:NS(vertices=lambda:[(0,0,0),(20,30,10)]))
+    modifier = NS(is_model_part=lambda:False, mesh=lambda:pytest.fail("modifier read"))
+    a = NS(id=lambda:101,printable=True,matrix=lambda:rotate)
+    other_plate = NS(id=lambda:202,printable=True,matrix=lambda:pytest.fail("other plate read"))
+    disabled = NS(id=lambda:303,printable=False,matrix=lambda:pytest.fail("disabled read"))
+    model = NS(objects=lambda:[NS(instances=lambda:[a,other_plate,disabled],volumes=lambda:[part,modifier])])
+    snapshot = PlateSnapshot(tmp_path/'p.3mf',1,({"id":"17","name":"Part","instances":2},),(("17","101"),("17","303")))
+    result = capture_footprint(snapshot,model)
+    assert result.min_bed_mm == {"x":30,"y":20,"z":15}
+    assert result.objects[0]["instances"] == 1
+
+
+def test_unknown_exported_identity_cannot_use_a_different_host_object(tmp_path):
+    from types import SimpleNamespace as NS
+    snapshot = PlateSnapshot(tmp_path/'p.3mf',1,(),(("17","101"),))
+    with pytest.raises(WorkflowError,match="plate changed"):
+        capture_footprint(snapshot,NS(objects=lambda:[]))

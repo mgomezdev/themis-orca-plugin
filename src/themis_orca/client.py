@@ -22,6 +22,14 @@ class MutationUncertain(ThemisError):
     """The server may have applied a write whose response was lost."""
 
 
+class SendConflict(ThemisError):
+    pass
+
+
+class NotFound(ThemisError):
+    pass
+
+
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # A reverse proxy redirect must never forward X-Api-Key to another URL.
@@ -33,9 +41,12 @@ class Connection:
     role: str
     local: bool
     missing_scopes: tuple[str, ...]
+    key_name: str | None = None
 
     def message(self) -> str:
         identity = f"Connected as {self.role}"
+        if self.key_name:
+            identity += f" with API key {self.key_name}"
         if self.local:
             identity += " via local-network access (API key identity is unverified)"
         if self.missing_scopes:
@@ -66,7 +77,7 @@ class ThemisClient:
             status = exc.code
             exc.close()
             messages = {
-                401: "Themis rejected the API key. Replace it in the plugin Config tab.",
+                401: "Themis rejected the API key. Paste a valid key in Connection settings.",
                 403: "The API key lacks permission. Check the key scopes in Themis.",
                 404: "Themis API was not found. Check the deployment URL and /api/v1 path.",
                 413: "Themis rejected an oversized request. Check the server upload limit.",
@@ -75,6 +86,12 @@ class ThemisClient:
             }
             if 300 <= status < 400:
                 raise ThemisError("Themis redirected the request. Configure the final URL, including HTTPS if required.") from None
+            if status == 409:
+                raise SendConflict("Themis reported a conflict: this work changed or has started. Refresh its status or choose Send as new.") from None
+            if status == 404:
+                raise NotFound(messages[404]) from None
+            if method != "GET" and status >= 500:
+                raise MutationUncertain("Themis could not confirm the write. Retry the saved send with its existing identity.") from None
             raise ThemisError(messages.get(status, f"Themis returned HTTP {status}. Check the server and try again.")) from None
         except PermissionError:
             raise ThemisError("Allow network access to the configured Themis URL in Orca, then retry.") from None
@@ -105,6 +122,24 @@ class ThemisClient:
         except (KeyError, TypeError):
             return False
 
+    def supports_footprints(self):
+        schema = self._request("GET", "/openapi.json", deployment_root=True)
+        try:
+            return all("min_bed_mm" in schema["components"]["schemas"][name]["properties"] for name in ("JobCreate", "ProjectItemCreate"))
+        except (KeyError, TypeError):
+            return False
+
+    def supports_slicer_sends(self):
+        schema = self._request("GET", "/openapi.json", deployment_root=True)
+        return isinstance(schema,dict) and "/api/v1/slicer-sends" in schema.get("paths",{})
+
+    def lookup_send(self, send_id):
+        send_id = str(UUID(send_id))
+        try:
+            return self._get("/slicer-sends/"+send_id)
+        except NotFound:
+            return None
+
     def upload(self, path, *, gcode_model=None):
         from uuid import uuid4
         path = Path(path)
@@ -133,17 +168,20 @@ class ThemisClient:
         })
 
     def test_connection(self) -> Connection:
-        me = self._get("/auth/me")
+        me = self._get("/auth/me?include_identity=true")
         if not isinstance(me, dict):
             raise ThemisError("Unexpected identity response. Check the Themis API version.")
         role = me.get("role")
         if role is None:
             # Themis returns 200 with role=null for unauthenticated callers.
-            raise ThemisError("Themis did not authenticate the key. Replace it in the plugin Config tab.")
+            raise ThemisError("Themis did not authenticate the key. Paste a valid key in Connection settings.")
         scopes = me.get("scopes")
         if not isinstance(role, str) or role not in {"staff", "admin", "customer"} or not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
             raise ThemisError("Unexpected identity response. Check the Themis API version.")
-        return Connection(role, me.get("local") is True, tuple(sorted((REFERENCE_SCOPES | SEND_SCOPES) - set(scopes))))
+        name = me.get("key_name")
+        if not isinstance(name,str) or self.settings.api_key in name or any(ord(c)<32 for c in name):
+            name = None
+        return Connection(role, me.get("local") is True, tuple(sorted((REFERENCE_SCOPES | SEND_SCOPES) - set(scopes))),name)
 
     def printer_models(self):
         return self._get("/printer-models?enabled=true&usable=true")

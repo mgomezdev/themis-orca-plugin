@@ -42,12 +42,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mgomezdev/themis
-          ref: be3500c5f4c69b3a5dc3dbd6dfcb4d2a74b47e09
+          ref: 900556da79256d6bfb8cddd77430ce7953243e4f
           path: themis
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - run: python -m pip install -e 'themis/backend[dev]'
-      - name: Verify G-code project imports and fixed-job generation
+      - name: Verify atomic geometry and G-code workflows against Themis
         working-directory: themis/backend
-        run: python -m pytest -c pyproject.toml -p tests.conftest ../../integration/test_themis_gcode.py -q
+        run: python -m pytest -c pyproject.toml -p tests.conftest ../../integration -q

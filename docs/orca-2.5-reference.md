@@ -37,7 +37,7 @@ the compatibility authority for this repository. No community plugin code was co
   Our one-shot connection-test Script therefore needs no extra Python thread. Do not assume that live model handles
   acquired from a Script worker are an immutable UI-thread snapshot.
 - **Panel callbacks:** `on_message` runs on the UI thread. Network work initiated there needs a worker; our independent
-  `BackgroundRefresh` helper is intended for that future path, not as another thread inside the connection-test Script.
+  `BackgroundRefresh` and `BackgroundSend` helpers serve that path, rather than nesting another worker inside the Script.
   Poll queued results or use documented host messaging. Never wait for a worker to finish on the UI thread.
 - **Lifecycle:** reuse/show an open panel, clear handles on close, cancel pending work on teardown, and discard results
   after cancellation. Arrange an initial page-to-plugin request because posts before page load can be dropped.
@@ -73,5 +73,23 @@ The 78 tests and wheel smoke tests recorded above do not substitute for those em
 at that time had no docked panel or send action. The subsequent panel implementation has automated adapter/page tests
 and browser previews; its actual host loading, permissions and rendering remain pending. The user explicitly authorized
 continuing with host loading assumed until they can return to the PC. The subsequent [geometry send workflows](send-workflows.md)
-now create jobs or project plate/object items; G-code capture and send-history updates remain pending. Their in-app export and
+now include geometry, raw G-code, persistent send history and queued-work updates. Their in-app export and
 live Themis execution also remain unverified until that deferred host check.
+
+## Geometry and preset identity review
+
+In the pinned `Plater.cpp`, `export_3mf_copy` uses SplitModel, ShareMesh and Silence without UseLoadedId.
+The matching `bbs_3mf.cpp` writer emits exported object/instance identifiers plus `identify_id` from the host instance's
+native ID. The plugin matches that ID when extracting positive printable model-part vertices, applying volume and
+instance matrices before computing the plate hull and height. It refuses missing identity instead of guessing object order.
+
+The pinned `PluginHostPresets.cpp` returns edited process/printer presets but resolves current filament names from saved
+presets. The plugin substitutes the matching edited filament where available. It follows inheritance to the system parent,
+compares full configuration values (including lists), copies supported differences, and reports unsupported keys.
+The stored system preset is used as the baseline even when the currently edited preset is itself a system preset.
+These source checks and adapter tests still need confirmation against real host-bound objects.
+
+The completed workflow implementation was subsequently checked with **197 passing tests under Orca's bundled Python
+3.12.13**, **11 passing Node page tests**, and **8 passing isolated real-Themis API cases**. The final wheel was built,
+installed and imported in isolated mode. Headless light/dark previews covered a 360-pixel dock, expanded settings and
+first-run key entry. These checks do not resolve the native acceptance items above.

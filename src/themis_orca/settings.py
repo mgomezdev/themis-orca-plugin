@@ -39,5 +39,5 @@ class Settings:
             raise ValueError("Themis configuration must be a JSON object.")
         key = config.get("api_key", "")
         if not isinstance(key, str) or not key.strip() or any(ord(c) < 32 or ord(c) > 126 for c in key):
-            raise ValueError("Enter your Themis API key in the plugin Config tab.")
+            raise ValueError("Paste your Themis API key in Connection settings.")
         return cls(api_base_url(config.get("url", "")), key.strip())

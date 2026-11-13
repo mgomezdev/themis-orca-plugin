@@ -70,9 +70,17 @@ def adapter(monkeypatch, tmp_path):
         starts = 0
         result = None
 
-        def start(self, settings, snapshot, plan):
+        def start(self, settings, snapshot, plan, **kwargs):
             self.starts += 1
             self.plan = plan
+            self.kwargs = kwargs
+            self.busy = True
+            return True
+
+        def acknowledge(self, saved):
+            self.acknowledged = saved
+
+        def lookup(self, settings, send_id):
             self.busy = True
             return True
 
@@ -84,17 +92,23 @@ def adapter(monkeypatch, tmp_path):
         with ZipFile(path, "w") as z:
             z.writestr("Metadata/model_settings.config", '<config><object id="17"><metadata key="name" value="Part"/></object>'
                 '<plate><metadata key="plater_id" value="3"/><model_instance><metadata key="object_id" value="17"/>'
-                '<metadata key="instance_id" value="0"/></model_instance></plate></config>')
+                '<metadata key="instance_id" value="0"/><metadata key="identify_id" value="33"/></model_instance></plate></config>')
 
     registrations = []
     create = Mock(side_effect=lambda **kwargs: Panel(**kwargs))
     model = SimpleNamespace(current_plate_index=Mock(return_value=2))
+    model.id = lambda:42
+    identity = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]
+    instance = SimpleNamespace(id=lambda:33, printable=True, matrix=lambda:identity)
+    volume = SimpleNamespace(is_model_part=lambda:True, matrix=lambda:identity,
+                             mesh=lambda:SimpleNamespace(vertices=lambda:[(0,0,0),(20,30,10)]))
+    model.objects = lambda:[SimpleNamespace(instances=lambda:[instance],volumes=lambda:[volume])]
     host = SimpleNamespace(
         base=object, plugin=lambda cls: cls,
         script=SimpleNamespace(ScriptPluginCapabilityBase=Capability),
         slicing=SimpleNamespace(SlicingPipelineCapabilityBase=Capability, Step=SimpleNamespace(psGCodePostProcess="export")),
         host=SimpleNamespace(ui=SimpleNamespace(create_dock_panel=create), model=Mock(return_value=model),
-                             plugin=SimpleNamespace(storage=lambda: str(tmp_path)), plater=lambda: SimpleNamespace(export_3mf_copy=export)),
+                             plugin=SimpleNamespace(storage=lambda: str(tmp_path)), plater=lambda: SimpleNamespace(export_3mf_copy=export,project_path=lambda:"")),
         request_permissions=Mock(), register_capability=registrations.append,
         ExecutionResult=SimpleNamespace(success=lambda message: ("success", message)),
     )
@@ -127,7 +141,7 @@ def test_export_hook_captures_export_time_profile_and_bytes_without_ui_or_networ
                           config_value=Mock(return_value="Printer 0.4 nozzle"))
     result = adapter.plugin.CaptureGCode().execute(ctx)
     assert "captured" in result[1]
-    ctx.config_value.assert_called_once_with("printer_settings_id")
+    ctx.config_value.assert_any_call("printer_settings_id")
     [(row, attempted)] = adapter.plugin._captures.entries()
     assert row.profile == "Printer 0.4 nozzle" and not attempted
     assert row.path.read_bytes() == source.read_bytes()
@@ -173,7 +187,7 @@ def test_gcode_send_uses_capture_without_reading_current_plate_and_cannot_repeat
     assert script.gcode_inflight is None
     send({"command": "send", "workflow": {"action": "new_gcode", "project_name": "Sliced", "capture_id": row.token}})
     assert script.sender.starts == 1
-    assert "already submitted" in panel.posts[-1]["notice"]
+    assert "cannot be updated" in panel.posts[-1]["notice"]
     send({"command": "clear_captures"})
     assert panel.posts[-1]["captures"] == [] and not row.path.exists()
     assert source.exists()
@@ -413,7 +427,7 @@ def test_inspect_export_and_send_are_explicit_and_use_frozen_plate_copy(adapter)
     assert panel.posts[-1]["send_result"]["created"]["item_ids"] == [30]
     send({"command": "send", "workflow": {"action": "job"}})
     assert script.sender.starts == 1
-    assert "already submitted" in panel.posts[-1]["notice"]
+    assert "cannot be updated" in panel.posts[-1]["notice"]
 
 
 def test_send_blocks_changed_plate_missing_scopes_and_preserves_project_overrides(adapter):
@@ -432,3 +446,55 @@ def test_send_blocks_changed_plate_missing_scopes_and_preserves_project_override
     send({"command": "send", "workflow": {"action": "new_plate", "project_name": "P", "overrides": {"wall_loops": 3}}})
     assert script.sender.starts == 1
     assert script.sender.plan.group_payload()["overrides"] == {"wall_loops": "3"}
+
+
+def test_send_identity_is_saved_before_upload_and_prepared_payload_before_remote_work(adapter):
+    panel,send = opened(adapter)
+    send({"command":"inspect"})
+    script = adapter.script
+    script.references = References()
+    script.connection = Connection("staff",False,())
+    send({"command":"send","workflow":{"action":"job"}})
+    assert script.sender.starts == 1
+    record = json.loads(script.raw_config)["send_history"][script.pending_key]
+    assert record["send_id"] == script.sender.kwargs["send_id"] and record["state"] == "preparing"
+    payload = {"send_id":record["send_id"],"kind":"job","job":{"uploaded_file_id":10,"plate_number":3}}
+    script.sender.result = {"stage":"prepared","send_id":record["send_id"],"request":payload}
+    send({"command":"poll"})
+    assert script.sender.acknowledged is True
+    stored = json.loads(script.raw_config)["send_history"][script.pending_key]
+    assert stored["request"] == payload and "private-key" not in json.dumps(stored)
+    script.sender.busy = False
+    script.sender.result = {"ok":True,"send_id":record["send_id"],"created":{"job_id":50},"can_update":True,"status":"queued","message":"Queued"}
+    send({"command":"poll"})
+    assert panel.posts[-1]["history"]["can_update"] and script.pending_key is None
+    assert "request" not in panel.posts[-1]["history"]
+    send({"command":"send","workflow":{"action":"job"}})
+    assert script.sender.kwargs["send_id"] == record["send_id"] and script.sender.kwargs["update"]
+
+
+def test_saved_request_can_be_retried_after_panel_recreation_without_source_or_reupload(adapter):
+    script = adapter.script
+    payload = {"kind":"job","send_id":"cd1581c2-4208-41a9-8028-10da5f05aa80","job":{"uploaded_file_id":10}}
+    config = json.loads(script.raw_config)
+    config["send_history"] = {"known":{"send_id":payload["send_id"],"server_url":"http://themis.test/api/v1",
+        "kind":"job","label":"Previous","state":"uncertain","request":payload}}
+    script.raw_config = json.dumps(config)
+    panel,send = opened(adapter)
+    send({"command":"choose_history","key":"known"})
+    send({"command":"retry_send"})
+    assert script.sender.starts == 1 and script.sender.plan is None
+    assert script.sender.kwargs["prepared"] == payload
+    assert script.snapshot is None and "private-key" not in json.dumps(panel.posts)
+
+
+def test_failed_worker_start_does_not_leave_panel_permanently_busy(adapter,monkeypatch):
+    panel,send = opened(adapter)
+    send({"command":"inspect"})
+    script = adapter.script
+    script.references = References()
+    script.connection = Connection("staff",False,())
+    monkeypatch.setattr(script.sender,"start",Mock(side_effect=RuntimeError("host failed")))
+    send({"command":"send","workflow":{"action":"job"}})
+    assert script.pending_key is None and not panel.posts[-1]["busy"]
+    assert len(json.loads(script.raw_config)["send_history"]) == 1  # UUID remains recoverable.
