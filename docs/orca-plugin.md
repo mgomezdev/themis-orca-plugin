@@ -2,21 +2,22 @@
 
 ## Current implementation
 
-This is the first BIZ-379 development slice, not the complete BIZ-151 integration.
-The wheel registers **Themis: Test connection**, a Script capability. The plugin has no third-party runtime dependencies.
-It reads the deployment URL and API key from Orca's built-in capability configuration and tests `GET /api/v1/auth/me`.
-The host displays a result with the role and missing scopes. Core client methods also cover printer models, printers,
-per-model slicer-profile mappings, the Laminus catalog, and projects. The independent reference loader and background
-refresh worker are implemented and tested, but are not yet connected to a panel.
+This is the BIZ-379 panel implementation, not the complete BIZ-151 integration.
+The wheel registers **Themis: Test connection**, a Script capability that opens the docked **Themis** panel on
+Prepare/Preview. Its existing capability name is preserved so host-stored configuration remains attached to the same identity.
+Running it again shows the existing panel rather than opening a duplicate. The plugin has no third-party runtime dependencies.
+
+The panel shows the current plate, masked URL/API-key settings, connection state and missing scopes, plus counts of printer
+models, printers, per-model slicer mappings, catalog presets, and projects. It polls plate state from UI callbacks and never
+retains live model handles. No network request is made until **Test connection & refresh** is chosen.
 
 The reference loader preserves successful collections when another fails and skips endpoints for missing read scopes.
 The refresh worker polls through a result queue without invoking host APIs off-thread. Duplicate in-flight refreshes
 are rejected. Cancellation discards the old result and stops further requests after the current socket operation completes.
 
-The docked panel, custom settings page, current-plate display, and sending are still to be implemented.
-The current Script action performs one synchronous request with a 10-second socket timeout. In the verified 2.5.0 source
-baseline, Orca runs Script actions on a host-owned worker, so this request does not run on the UI thread.
-Panel `on_message` callbacks do run on the UI thread and will use the separate background refresh helper.
+Orca runs Script actions on a host-owned worker; opening/showing the host panel marshals to its UI thread.
+Panel `on_message` callbacks run on the UI thread and use the separate background refresh helper for HTTP requests.
+They never join that worker. The panel displays counts and per-collection errors after a refresh. Sending remains pending.
 Do not treat this development wheel as a production release. Plugin loading and network prompts still need verification inside Orca 2.5.0.
 See [the pinned reference review and verification record](orca-2.5-reference.md) for official examples and wiki discrepancies.
 
@@ -29,6 +30,7 @@ and installs/imports the built wheel in isolated mode so source-tree imports can
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e '.[dev]'
 .\.venv\Scripts\python -m pytest
+node --test tests/panel_ui.test.cjs
 .\.venv\Scripts\python -m build --wheel
 ```
 
@@ -39,8 +41,13 @@ Importing that package registers the plugin only when the embedded `orca` module
 ## Installation and configuration
 
 1. Use OrcaSlicer **2.5.0** (target API: 2.5.x). Open its Plugins dialog and install the built wheel from file.
-2. Select **Themis: Test connection** and open the **Config** tab. Restore defaults if the editor is empty.
-3. Set these values and save using the host editor:
+2. Activate the plugin and run **Themis: Test connection** to open the **Themis** panel.
+3. In **Connection settings**, enter the Themis URL and API key and choose **Save settings**. The key is masked;
+   leaving it blank preserves a stored key. **Forget API key** explicitly removes it. Saving does not contact Themis.
+4. Choose **Test connection & refresh**. Approve access only to your configured Themis endpoint when Orca prompts, then
+   retry if the first attempt was denied while the prompt was being displayed. Off-main-thread audit events fail closed on first use.
+
+The expert **Config** tab still accepts the original JSON format. Its built-in JSON editor displays the key in plain text:
 
    ```json
    {"url": "https://themis.example.test", "api_key": "YOUR_API_KEY"}
@@ -48,13 +55,12 @@ Importing that package registers the plugin only when the embedded `orca` module
 
    The URL may be the deployment root or include `/api/v1`. Reverse-proxy prefixes are supported.
    URL credentials, queries, and fragments are rejected. HTTP is supported for local deployments; use HTTPS for remote connections.
-4. Run the capability. Approve access only to your configured Themis endpoint when Orca prompts, then retry if the first
-   attempt was denied while the prompt was being displayed. Off-main-thread audit events fail closed on first use.
-
 The plugin makes no network calls during discovery and requests no wildcard network permission.
-Capability config is unavailable during package registration, so this initial implementation relies on Orca's first-use audit prompt for the actual URL.
+It declares thread permission for background requests initiated by panel callbacks. Capability config is unavailable during
+package registration, so it relies on Orca's first-use network audit prompt for the actual configured URL.
 Further permission behavior, including socket prompts, must be checked in the host before BIZ-379 is complete.
-The API key stays in host-managed plugin configuration; it is not encrypted by this plugin. The built-in JSON editor shows it in plain text.
+The API key stays in host-managed plugin configuration; it is not encrypted by this plugin. The panel never sends a stored
+key back to its page; it sends only a flag indicating that one is present. After a successful save, the password field clears.
 Do not share screenshots or copies of this configuration. The plugin never includes the key or raw server error bodies in result messages or logs.
 
 ## API scopes and identity
@@ -85,12 +91,16 @@ Reporting the actual staff key owner requires a backend identity contract change
 ## Verification boundaries and next work
 
 Automated tests exercise real HTTP requests against a local test server, complete background reference refresh,
-scope/error handling, cancellation, duplicate-refresh protection, URL validation, and discovery/config/run against an `orca` stub.
+scope/error handling, cancellation, duplicate-refresh protection, URL validation, panel messages, settings preservation,
+stale-page rejection, concurrent opening, and teardown against an `orca` stub. Node's built-in test runner checks the
+page's host bridge, commands, control states, credential-field clearing, and text-only rendering of status/errors.
+Headless Chrome previews exercise the packaged HTML in light/dark simulated host themes at dock width.
 They do not prove embedded-host compatibility.
 
 Before marking BIZ-379 done: verify wheel discovery/loading in Orca 2.5.0, check reload/unload, verify actual permission prompts,
-add a masked custom settings editor with connection testing, build the docked Prepare/Preview panel,
-show current plate and refresh reference data. Sending waits for the relevant backend contracts in [the roadmap](roadmap.md).
+and exercise the panel on Prepare/Preview with a real Themis endpoint. The user explicitly deferred these PC-dependent
+checks and authorized proceeding with loading assumed; they are still unverified. Sending waits for the relevant backend
+contracts in [the roadmap](roadmap.md).
 
 ## Orca API references
 

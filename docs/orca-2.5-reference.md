@@ -42,8 +42,8 @@ the compatibility authority for this repository. No community plugin code was co
 - **Lifecycle:** reuse/show an open panel, clear handles on close, cancel pending work on teardown, and discard results
   after cancellation. Arrange an initial page-to-plugin request because posts before page load can be dropped.
 - **Permissions:** declare only permissions actually used. Registration cannot inspect capability config, so do not
-  hard-code or request wildcard Themis URLs. The current connection Script has no explicit thread requirement and relies
-  on the actual configured request's audit event. In this build, an ungranted off-main-thread event fails immediately
+   hard-code or request wildcard Themis URLs. The current panel requests thread permission for its background refresh and relies
+   on the actual configured request's network audit event. In this build, an ungranted off-main-thread event fails immediately
   while the host posts a permission prompt; after the user grants access, retry. See the
   [permissions design](https://github.com/OrcaSlicer/OrcaSlicer/blob/40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19/docs/HLSD/plugin-permissions.md).
   Native host grants may cover a whole host and do not enforce ports, so our client still constructs requests only
@@ -65,5 +65,7 @@ the compatibility authority for this repository. No community plugin code was co
 
 Pending in-app checks: refresh/discover the side-loaded wheel, activate the plugin, inspect/restore its configuration,
 run with missing settings, reload it, then test an explicitly configured Themis endpoint and its network prompt.
-The 78 tests and wheel smoke tests do not substitute for those embedded-host checks. The current wheel has no docked
-panel or send action, so these cannot be verified yet.
+The 78 tests and wheel smoke tests recorded above do not substitute for those embedded-host checks. The wheel checked
+at that time had no docked panel or send action. The subsequent panel implementation has automated adapter/page tests
+and browser previews; its actual host loading, permissions and rendering remain pending. The user explicitly authorized
+continuing with host loading assumed until they can return to the PC. Sending is still not implemented.
