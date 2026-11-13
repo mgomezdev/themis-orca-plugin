@@ -14,6 +14,8 @@ Height is maximum world Z above the bed plane (Z=0), without adding margin or su
 XY translation does not change the required bed dimensions. The calculation does not rotate the plate to find a smaller
 rectangle; it preserves the orientation of the sliced/exported plate.
 
-This is the independently tested calculation layer. 3MF plate-membership parsing, host mesh/transform capture, export,
-filament/preset options, sending, and server-side eligibility enforcement remain pending. Do not interpret these unit tests
-as proof that the current Themis claim loop enforces bed dimensions; that requires backend BIZ-375.
+The adapter now parses exported plate membership, matches native instance identities and captures transformed printable
+model-part vertices on the UI thread. Plate jobs/items carry this requirement; object imports omit the old arrangement
+because they are repacked. Themis PR #199 enforces fit at target expansion, resync, sliced upload and claim.
+Real API integration tests verify small-bed exclusion and queued updates. Native Orca mesh bindings and live printing
+remain on the [deferred acceptance checklist](roadmap.md).

@@ -78,3 +78,49 @@ def test_invalid_workflows_are_rejected_before_writes(context, changes):
 def test_project_overrides_are_preserved_in_group_request(context):
     plan = build_plan({"action": "new_plate", "project_name": "P", "overrides": {"wall_loops": 3}}, *context)
     assert plan.group_payload()["overrides"] == {"wall_loops": "3"}
+
+
+def test_plate_footprint_and_margin_reach_jobs_and_plate_items(context):
+    snapshot, refs = context
+    snapshot.min_bed_mm = {"x":300,"y":280,"z":100}
+    for action in ("job","existing_plate"):
+        plan = build_plan({"action":action,"project_id":7,"margin_mm":2},snapshot,refs)
+        assert plan.job_payload(1)["min_bed_mm"] == {"x":304,"y":284,"z":100}
+        if action != "job":
+            assert plan.item_payloads(1,2)[0]["min_bed_mm"] == plan.min_bed_mm
+    plan = build_plan({"action":"existing_objects","project_id":7,"object_ids":["17"]},snapshot,refs)
+    assert plan.min_bed_mm is None  # objects are repacked, so the old plate arrangement is irrelevant
+
+
+def test_per_filament_presets_requirements_and_target_overrides_reach_both_destinations(context):
+    snapshot,refs = context
+    refs.catalog["filament"] = [{"name":"Generic PLA"}]
+    mapping = [{"model_filament":1,"filament_type":"PLA","filament_subtype":"any","filament_color":"red","filament_profile":"Generic PLA"}]
+    plan = build_plan({"action":"job","targets":["5","model:model-a"],"filament_map":mapping,
+        "target_overrides":{"5":{"wall_loops":"4"}},"preference":["model:model-a","5"],"preference_strict":True},snapshot,refs)
+    assert plan.job_payload(1)["printer_configs"][0]["filament_map"] == mapping
+    assert plan.job_payload(1)["printer_configs"][0]["overrides"] == {"wall_loops":"4"}
+    assert "overrides" not in plan.job_payload(1)["model_targets"][0]
+    assert plan.group_payload()["targets"][0]["filament_map"] == mapping
+    assert plan.group_payload()["printer_preference"] == {"entries":["model-a",5],"strict":True}
+
+
+@pytest.mark.parametrize("settings",[{"preference":["any"]},{"preference":[["5"]]},{"preference_strict":True},
+    {"target_overrides":{"99":{"wall_loops":3}}},{"filament_map":[{"model_filament":1,"filament_type":"PLA"}]},
+    {"margin_mm":float("nan")},{"margin_mm":-1}])
+def test_invalid_extended_settings_never_build_a_send(context,settings):
+    with pytest.raises(WorkflowError):
+        build_plan({"action":"job",**settings},*context)
+
+
+def test_common_filament_rule_is_preserved_when_presets_are_enabled(context):
+    snapshot,refs = context
+    refs.catalog["filament"] = [{"name":"Generic PLA"}]
+    mapping = [{"model_filament":1,"filament_profile":"Generic PLA"},
+               {"model_filament":2,"filament_color":"blue"}]
+    plan = build_plan({"action":"job","use_filament":True,"filament_type":"PLA",
+        "filament_subtype":"any","filament_color":"red","filament_map":mapping},snapshot,refs)
+    entries = plan.job_payload(1)["model_targets"][0]["filament_map"]
+    assert [e["filament_type"] for e in entries] == ["PLA","PLA"]
+    assert [e["filament_color"] for e in entries] == ["red","blue"]
+    assert "filament_type" not in mapping[0]  # Do not mutate the inspected/user-owned data.

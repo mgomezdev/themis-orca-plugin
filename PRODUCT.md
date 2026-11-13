@@ -7,7 +7,7 @@ product
 ## Users and purpose
 
 BIZ-151 describes operators working in OrcaSlicer who send the current plate to Themis as a job or project item.
-The plugin belongs beside the Prepare/Preview workspace, with three eventual send modes and explicit Use/Ignore
+The plugin belongs beside the Prepare/Preview workspace, with geometry and G-code destinations and explicit Use/Ignore
 choices for optional settings. Success means an operator can see which plate and connection are active before sending.
 
 The send workflow must offer a plate job; a plate or selected plate objects added to an existing project; and a plate
@@ -15,9 +15,11 @@ or selected plate objects added to a new project. Each import can set eligible p
 process preset, quantities, and filament rules. Project imports use their own group so prior project items retain
 their settings. Users review an inspected immutable copy; changes made afterward require another inspection.
 
-Sliced G-code can also be added to a new or existing project. Capture an immutable local copy at export time, then
-require an explicit choice/send in the panel. Match that slice's exact printer profile to a Themis model and its
-physical printers; never substitute the currently selected GUI preset or silently fall back to Any printer.
+Sliced G-code can create a job or be added to a new or existing project. Capture an immutable local copy at export time,
+then require an explicit choice/send. Match the captured machine profile or its system parent to a Themis model;
+allow the operator to review or change that model. Never silently fall back to Any printer.
+Persist the send UUID before upload and the request before submission. Offer lookup, retry, update and Send as new;
+started work must be protected from replacement. The key field must support normal paste and an explicit reveal/copy path.
 
 ## Reference and voice
 

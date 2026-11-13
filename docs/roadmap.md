@@ -1,46 +1,32 @@
-# BIZ-151 implementation map
+# BIZ-151 implementation and acceptance
 
-The user selected a standalone `orca-plugin` repository, superseding the earlier issue comment suggesting `integrations/orcaslicer/` inside Themis.
+The original issue and sub-issues define the scope, supplemented by the user's plate/object project-import requirements.
 
-## Plugin work
+| Work | Implementation |
+| --- | --- |
+| BIZ-379: package, settings, panel | Pure-Python wheel, host-owned dock, paste/copy-friendly API-key field, safe key-label/scopes reporting and background HTTP. |
+| BIZ-380: sliced G-code | Immutable export capture and config facts, machine/system-parent matching, editable model, direct job and new/existing-project destinations. |
+| BIZ-381: geometry | Exported membership/instance identity, transformed printable-part hull and height, configurable margin, job/plate/object destinations, optional filaments and catalog presets. |
+| BIZ-382: overrides/preferences | Edited-preset differences against the system parent, unsupported-key warnings, per-target overrides, ordered preference and strict/no-fallback. |
+| BIZ-383: history/updates | UUID saved before upload; request saved before submission; restart recovery, lookup, Update, Retry, Send as new and Open in Themis. |
+| BIZ-375–378: backend | Themis PR #199 adds footprint eligibility, target settings, preference claiming, atomic replay/update, migrations 69–71 and OpenAPI. |
 
-1. BIZ-379: package, configuration, connection test, docked panel and reference data.
-2. BIZ-380: capture G-code on the slicing worker, then send unchanged bytes for a selected printer model.
-3. BIZ-381: export geometry, resolve plate membership, calculate footprint, optional filaments/presets.
-   The pure world-space footprint calculation is implemented separately; see [its input contract](geometry.md).
-4. BIZ-382: per-target preset differences and ordered printer preferences.
-5. BIZ-383: persist send identity and update previous sends.
+Deploy the updated Themis backend before using these sends. The plugin checks its atomic API before uploading.
+The provider's existing curated override allowlist is retained; unsupported differences are shown rather than silently applied.
+Started work, active pools, and packs shared with unrelated items are protected against replacement.
 
-The send form now implements five geometry workflows: create a plate job, add a plate/objects to an existing project,
-and add a plate/objects to a new project. Import-specific groups carry printer/model eligibility, process preset and
-curated overrides; item asks carry filament type/subtype/color/vendor. New projects start in planning and project imports
-do not automatically generate jobs. The companion Themis group-overrides extension and migration 68 must be deployed for
-project overrides; the plugin checks its schema before making any writes.
+## Deferred native acceptance
 
-Two G-code project destinations are implemented: add an export to a new or existing project. A synchronous
-post-process capability captures raw G-code unchanged, using the export-time `printer_settings_id`. Exact Laminus
-machine-profile mappings establish the file's eligible model; the import group targets registered printers with
-that model and resolved profile (including nozzle variant). The panel requires explicit export selection and send.
-Sliced `.gcode.3mf` archive capture and direct G-code job sends remain outside this increment.
+The user is away from the PC and authorized assuming plugin loading works to unblock development. These checks remain
+unverified and must not be reported as passed:
 
-## Backend dependencies (Themis repository)
+- Orca wheel installation/discovery, reload/unload and actual network/filesystem/thread permission prompts.
+- Embedded WebView copy/paste, dock behavior, real export/identity/matrix bindings and preset snapshots.
+- Export/upload capture, live-Themis sends and real printer execution.
+- Whether Bambu Print plate / sliced `.gcode.3mf` export runs the post-process seam. The documented implementation captures raw `.gcode`; Themis format gating still applies.
 
-- BIZ-375: footprint eligibility.
-- BIZ-376: per-target overrides.
-- BIZ-377: preference-aware claiming.
-- BIZ-378: idempotent sends and updates to unstarted work.
+Orca's post-process context does not identify a plate. A user can explicitly associate a selected export with the current
+project/plate for history. Otherwise the export is remembered by content/profile, never guessed from GUI state on a worker.
 
-Do not invent routes or silently emulate these missing backend guarantees. Confirm contracts before implementing sending.
-
-## Host constraints
-
-Target Orca 2.5.x, with the exact host build recorded during verification. Use host-owned UI. Export 3MF through the supported UI-thread path. Plate membership must come from the exported `Metadata/model_settings.config`. G-code capture uses `psGCodePostProcess` with the plugin enabled in the process preset; no UI calls from that worker. A normal completion event does not provide G-code bytes.
-
-In v2.5.0 build `40ecc66f`, Script actions run on a host-owned worker; panel message callbacks run on the UI thread.
-The official wiki has stale descriptions of this behavior. Follow the [pinned source review](orca-2.5-reference.md).
-
-## Sources
-
-- [BIZ-151](https://linear.app/deviant-mushroom/issue/BIZ-151), including sub-issues and agent notes.
-- [Official plugin guide](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/plugin_development.html).
-- [Orca v2.5.0 plugin source](https://github.com/OrcaSlicer/OrcaSlicer/tree/v2.5.0/src/slic3r/plugin).
+See [workflows](send-workflows.md), [host source review](orca-2.5-reference.md),
+[Themis PR #199](https://github.com/mgomezdev/themis/pull/199), and [BIZ-151](https://linear.app/deviant-mushroom/issue/BIZ-151).

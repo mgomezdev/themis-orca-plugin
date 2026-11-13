@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 
 from themis_orca.gcode import CaptureStore, GCodeSnapshot
+from themis_orca.client import Connection
 from themis_orca.references import References
 from themis_orca.send import execute_send
 from themis_orca.workflow import build_plan, WorkflowError
@@ -113,22 +114,23 @@ def test_gcode_project_sequence_sets_file_and_group_eligibility_before_items(act
     assert plan.group_payload() == {"targets": [{"target_key": "5", "process_profile": ""}]}
     assert plan.item_payloads(10, 20) == [{"file_id": 10, "group_id": 20, "kind": "gcode", "source_ref": "1",
                                         "quantity": 3, "pack_rule": "locked"}]
-    created_project = [{"id": 7}] if action == "new_gcode" else []
-    api = SimpleNamespace(upload=Mock(return_value={"id": 10, "eligibility": {"known": True, "model_uuids": [MODEL]}}),
-        write_json=Mock(side_effect=[*created_project, {"id": 20}, plan.group_payload(), {"id": 30}]))
+    api = SimpleNamespace(test_connection=Mock(return_value=Connection("staff",False,())),supports_slicer_sends=Mock(return_value=True),upload=Mock(return_value={"id": 10, "eligibility": {"known": True, "model_uuids": [MODEL]}}),
+        write_json=Mock(return_value={"send_id":"send-id","created":{"project_id":7,"group_id":20,"item_ids":[30]},"can_update":True}))
     result = execute_send(api, snapshot(), plan, "send-id")
     assert result["ok"], result
     api.upload.assert_called_once_with(snapshot().path, gcode_model=MODEL)
-    assert api.write_json.call_args_list[-1].args == ("POST", "/projects/7/items", plan.item_payloads(10, 20)[0])
+    assert api.write_json.call_args.args[:2] == ("POST","/slicer-sends")
+    assert api.write_json.call_args.args[2]["group"]["targets"] == plan.group_payload()["targets"]
+    assert api.write_json.call_args.args[2]["items"][0]["kind"] == "gcode"
     assert all(call.args[1] != "/jobs" for call in api.write_json.call_args_list)
 
 
-@pytest.mark.parametrize("confirmed", [False, "wrong_model", "group"])
+@pytest.mark.parametrize("confirmed", [False, "wrong_model"])
 def test_eligibility_must_be_confirmed_before_adding_gcode_to_project(confirmed):
     plan = build_plan({"action": "new_gcode", "project_name": "Sliced"}, snapshot(), references())
     eligibility = {"known": True, "model_uuids": [MODEL]} if confirmed == "group" else {
         "known": confirmed is not False, "model_uuids": [OTHER]}
-    api = SimpleNamespace(upload=Mock(return_value={"id": 10, "eligibility": eligibility}),
+    api = SimpleNamespace(test_connection=Mock(return_value=Connection("staff",False,())),supports_slicer_sends=Mock(return_value=True),upload=Mock(return_value={"id": 10, "eligibility": eligibility}),
                           write_json=Mock(side_effect=[{"id": 7}, {"id": 20}, {}]))
     result = execute_send(api, snapshot(), plan, "send-id")
     assert not result["ok"] and "confirm" in result["message"]
@@ -147,3 +149,18 @@ def test_gcode_cannot_be_retargeted_or_resliced_by_hidden_geometry_settings(sett
 def test_gcode_bytes_cannot_be_sent_as_geometry():
     with pytest.raises(WorkflowError, match="geometry plate"):
         build_plan({"action": "job"}, snapshot(), references())
+
+
+def test_direct_gcode_job_targets_one_model_without_explicit_printers():
+    plan = build_plan({"action":"gcode_job"},snapshot(),references())
+    payload = plan.job_payload(10)
+    assert payload["printer_configs"] == []
+    assert payload["model_targets"] == [{"model_uuid":MODEL,"print_profile":""}]
+    assert payload["plate_number"] == 1 and plan.gcode_model == MODEL
+
+
+def test_custom_machine_uses_system_parent_and_manual_model_can_resolve_unmatched_capture():
+    row = GCodeSnapshot(Path("captured.gcode"),"token","part.gcode","Custom", "hash",system_profile=PROFILE)
+    assert build_plan({"action":"gcode_job"},row,references()).gcode_model == MODEL
+    row = GCodeSnapshot(row.path,row.token,row.name,"Unknown","hash")
+    assert build_plan({"action":"gcode_job","gcode_model":OTHER},row,references()).gcode_model == OTHER

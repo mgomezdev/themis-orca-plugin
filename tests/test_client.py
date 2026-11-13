@@ -54,7 +54,7 @@ def server():
 def test_auth_request_and_success(server):
     handler, client = server
     connection = client.test_connection()
-    assert handler.seen == [("/api/v1/auth/me", "private-test-key")]
+    assert handler.seen == [("/api/v1/auth/me?include_identity=true", "private-test-key")]
     assert connection.missing_scopes == ()
     assert connection.message() == "Connected as staff. All plugin scopes are available."
 
@@ -171,7 +171,7 @@ def test_background_refresh_with_no_read_scopes_requests_only_identity(server):
     result = refresh.poll()
     assert result.error is None
     assert set(result.references.errors) == {"models", "printers", "projects", "catalog"}
-    assert handler.seen == [("/api/v1/auth/me", "private-test-key")]
+    assert handler.seen == [("/api/v1/auth/me?include_identity=true", "private-test-key")]
 
 
 def test_json_write_and_multipart_upload_preserve_payload_bytes(server, tmp_path):

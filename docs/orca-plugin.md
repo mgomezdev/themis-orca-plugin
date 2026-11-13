@@ -1,32 +1,15 @@
 # Orca → Themis plugin development
 
-## Current implementation
+The development wheel implements the [BIZ-151 workflows](send-workflows.md): plate jobs, plate/object project imports,
+raw sliced G-code jobs/project imports, target settings, footprint eligibility and persistent send recovery.
+It uses the official 2.5.0 examples reviewed in [the pinned source record](orca-2.5-reference.md).
+The Script capability retains its original **Themis: Test connection** name so existing host configuration survives upgrades.
+Running it opens or shows one host-owned dock on Prepare/Preview. There are no third-party runtime dependencies.
 
-This is the BIZ-379 panel implementation, not the complete BIZ-151 integration.
-The wheel registers **Themis: Test connection**, a Script capability that opens the docked **Themis** panel on
-Prepare/Preview. Its existing capability name is preserved so host-stored configuration remains attached to the same identity.
-Running it again shows the existing panel rather than opening a duplicate. The plugin has no third-party runtime dependencies.
+## Setup and checks
 
-The panel shows the current plate, masked URL/API-key settings, connection state and missing scopes, plus counts of printer
-models, printers, per-model slicer mappings, catalog presets, and projects. It polls plate state from UI callbacks and never
-retains live model handles. No network request is made until **Test connection & refresh** is chosen.
-
-The reference loader preserves successful collections when another fails and skips endpoints for missing read scopes.
-The refresh worker polls through a result queue without invoking host APIs off-thread. Duplicate in-flight refreshes
-are rejected. Cancellation discards the old result and stops further requests after the current socket operation completes.
-
-Orca runs Script actions on a host-owned worker; opening/showing the host panel marshals to its UI thread.
-Panel `on_message` callbacks run on the UI thread and use the separate background refresh helper for HTTP requests.
-They never join that worker. The panel displays counts and per-collection errors after a refresh.
-The [send form](send-workflows.md) supports plate jobs and plate/object imports into new or existing projects, with
-eligibility, process presets, curated overrides, quantities and filament rules. Jobs use geometry; G-code capture remains pending.
-Do not treat this development wheel as a production release. Plugin loading and network prompts still need verification inside Orca 2.5.0.
-See [the pinned reference review and verification record](orca-2.5-reference.md) for official examples and wiki discrepancies.
-
-## Local setup and checks
-
-Requires Python 3.12 or newer. CI checks 3.12 and 3.13 on Windows and Linux, builds the wheel,
-and installs/imports the built wheel in isolated mode so source-tree imports cannot hide packaging errors.
+Requires Python 3.12+. CI tests Python 3.12/3.13 on Windows/Linux, Node page contracts, isolated wheel installation,
+and real Themis API contracts pinned to the merged backend. Native Orca verification remains deferred.
 
 ```powershell
 python -m venv .venv
@@ -36,79 +19,69 @@ node --test tests/panel_ui.test.cjs
 .\.venv\Scripts\python -m build --wheel
 ```
 
-The wheel is written to `dist/themis_orca-0.1.0.dev0-py3-none-any.whl`.
-Setuptools writes the single import package `themis_orca` into `top_level.txt`, which Orca's wheel loader uses to select the entry module.
-Importing that package registers the plugin only when the embedded `orca` module is available. The client imports normally outside Orca.
+The wheel is `dist/themis_orca-0.1.0.dev0-py3-none-any.whl`. It includes one import package and `top_level.txt`,
+which Orca uses for discovery. Importing outside Orca does not register host capabilities.
+See [API contract verification](../integration/README.md) for the companion suite.
 
 ## Installation and configuration
 
-1. Use OrcaSlicer **2.5.0** (target API: 2.5.x). Open its Plugins dialog and install the built wheel from file.
-2. Activate the plugin and run **Themis: Test connection** to open the **Themis** panel.
-3. In **Connection settings**, enter the Themis URL and API key and choose **Save settings**. The key is masked;
-   leaving it blank preserves a stored key. **Forget API key** explicitly removes it. Saving does not contact Themis.
-4. Choose **Test connection & refresh**. Approve access only to your configured Themis endpoint when Orca prompts, then
-   retry if the first attempt was denied while the prompt was being displayed. Off-main-thread audit events fail closed on first use.
+1. Install the wheel from OrcaSlicer 2.5.0's Plugins dialog and activate it.
+2. Run **Themis: Test connection** to open the panel.
+3. Expand **Connection settings**, enter the URL and paste the API key. Normal clipboard shortcuts are retained.
+   **Show entered API key** allows reviewing/copying the entered value. Save clears and remasks the field.
+   A blank field preserves the stored key; **Forget API key** removes it. Saving makes no network request.
+4. Choose **Test connection & refresh**. If Orca prompts for the configured endpoint, grant access and retry.
+5. Review the source, destination and optional settings before sending. See [the workflow guide](send-workflows.md).
 
-The expert **Config** tab still accepts the original JSON format. Its built-in JSON editor displays the key in plain text:
+The expert Config tab accepts `{"url":"https://themis.example.test","api_key":"YOUR_API_KEY"}`.
+Its JSON editor displays the key; avoid sharing that configuration. The panel never reads a stored key back into its page.
+The key is retained in host-managed plugin configuration, without additional plugin encryption.
+URLs can include `/api/v1` and reverse-proxy prefixes. URL credentials, queries, fragments and redirects are refused.
+HTTP supports local deployments; use HTTPS remotely.
 
-   ```json
-   {"url": "https://themis.example.test", "api_key": "YOUR_API_KEY"}
-   ```
+Deploy [Themis PR #199](https://github.com/mgomezdev/themis/pull/199), including migrations 69–71, first.
+Older servers are rejected before upload because atomic send/replay/update support is required.
 
-   The URL may be the deployment root or include `/api/v1`. Reverse-proxy prefixes are supported.
-   URL credentials, queries, and fragments are rejected. HTTP is supported for local deployments; use HTTPS for remote connections.
-The plugin makes no network calls during discovery and requests no wildcard network permission.
-It declares thread permission for background requests initiated by panel callbacks. Capability config is unavailable during
-package registration, so it relies on Orca's first-use network audit prompt for the actual configured URL.
-Further permission behavior, including socket prompts, must be checked in the host before BIZ-379 is complete.
-The API key stays in host-managed plugin configuration; it is not encrypted by this plugin. The panel never sends a stored
-key back to its page; it sends only a flag indicating that one is present. After a successful save, the password field clears.
-Do not share screenshots or copies of this configuration. The plugin never includes the key or raw server error bodies in result messages or logs.
+## Authentication and permissions
 
-## API scopes and identity
+Requests use `X-Api-Key`. A fresh identity/scope check precedes every send or replay.
+Local-network fallback is not accepted as verified key authentication for sending.
+`/auth/me?include_identity=true` supplies an optional key label; this is not a staff owner's identity.
+The plugin shows role, key label and missing scopes without echoing credentials or raw server errors.
 
-Reference-data reads need `printers:read`, `projects:read`, and `laminus:read`.
-The planned job/project workflows also need `files:write`, `jobs:read`, `jobs:write`, and `projects:write`.
-The connection test reports any of these missing scopes by name; missing scopes do not mean the server is unreachable.
+Reference loading uses `printers:read`, `projects:read`, and `laminus:read` as available.
+Fresh sends need `files:write`, `jobs:read`, and the destination's `jobs:write` or `projects:write`.
+Project lookup requires `projects:read`. Retry uses the stored request and does not re-upload the file.
 
-Contract checked against the sibling Themis backend's `app/api/routes/session.py`, `printer_models.py`,
-`printer_model_slicer_profiles.py`, `printers.py`, `projects.py`, `laminus.py`, and `app/auth.py` on 2026-11-12.
-Requests use `X-Api-Key`. In the current backend, `/auth/me` returns `role`, `local`, `customer`, and `scopes`.
-It returns HTTP 200 with `role: null` when unauthenticated. It does **not** return a staff key owner's name or key label.
-The plugin therefore reports the role and flags local-network fallback as an unverified key identity.
-Reporting the actual staff key owner requires a backend identity contract change.
+Discovery and G-code capture perform no network calls. The plugin declares thread access for panel-initiated background
+HTTP and relies on Orca's first-use audit prompt for the configured URL, without requesting wildcard network access.
+Off-main-thread first use can fail while Orca displays the prompt; grant the intended endpoint and retry.
+Actual network/filesystem/thread prompts still require native acceptance.
+
+## Execution and recovery
+
+Panel callbacks capture host data on the UI thread. Workers receive immutable snapshots, perform HTTP and queue results;
+they do not call host APIs. UI polling persists the prepared request and acknowledges it before the worker submits.
+A failed persistence step prevents submission. Closing the panel stops a prepared send awaiting acknowledgement;
+a request already in flight can be recovered by lookup/replay using its saved UUID.
+
+Refresh keeps successful reference collections when another fails, skips unavailable scopes, rejects duplicate refreshes,
+and discards canceled results. Geometry uses a copy export; original model files and exported G-code remain unchanged.
+G-code capture runs synchronously at the source-verified post-process seam and performs bounded local streaming I/O only.
 
 ## Troubleshooting
 
 | Result | Action |
 | --- | --- |
-| Missing or rejected key | Set a valid API key in the Config tab. |
+| Missing/rejected key | Paste a valid key in Connection settings and save. |
 | Missing scopes | Enable the named scopes on the key in Themis. |
-| Cannot reach Themis | Check the URL, network, TLS trust, and server availability. |
-| Network permission denied | Allow the configured Themis URL in Orca and retry. |
-| API not found or invalid JSON | Check the deployment prefix; a login page or frontend URL is not the API. |
-| Redirected request | Configure the final URL, including HTTPS where required. Credentials are never forwarded through redirects. |
-| Local-network access | The server may have accepted local access despite an invalid key; validate the key outside local fallback. |
+| Cannot reach Themis | Check URL, network, TLS trust and server availability. |
+| Permission denied | Allow the intended configured endpoint/access in Orca, then retry. |
+| Atomic API unavailable | Deploy the updated Themis backend and migrations. |
+| Unknown export profile | Select the intended model explicitly; verify its Themis slicer mapping. |
+| Submission outcome uncertain | Refresh saved-send status, then Retry saved send using the same UUID. |
+| Started/shared work conflict | Open the existing work or deliberately choose Send as new. |
 
-## Verification boundaries and next work
-
-Automated tests exercise real HTTP requests against a local test server, complete background reference refresh,
-scope/error handling, cancellation, duplicate-refresh protection, URL validation, panel messages, settings preservation,
-stale-page rejection, concurrent opening, and teardown against an `orca` stub. Node's built-in test runner checks the
-page's host bridge, commands, control states, credential-field clearing, and text-only rendering of status/errors.
-Headless Chrome previews exercise the packaged HTML in light/dark simulated host themes at dock width.
-They do not prove embedded-host compatibility.
-
-Before marking BIZ-379 done: verify wheel discovery/loading in Orca 2.5.0, check reload/unload, verify actual permission prompts,
-and exercise the panel on Prepare/Preview with a real Themis endpoint. The user explicitly deferred these PC-dependent
-checks and authorized proceeding with loading assumed; they are still unverified. Geometry sends are implemented as
-described in [the workflow guide](send-workflows.md), including raw G-code capture and new/existing-project imports.
-Sliced-archive capture, direct G-code jobs, end-to-end send idempotency/history, per-target overrides,
-printer preferences and server-side footprint eligibility still depend on the remaining [roadmap](roadmap.md) contracts.
-
-## Orca API references
-
-- [Plugin development and wheel discovery](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/plugin_development.html)
-- [Registration and configuration methods](https://www.orcaslicer.com/wiki/developer_reference/plugin_development/api_reference/registry.html)
-- [Pinned v2.5.0 bridge](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.5.0/src/slic3r/plugin/PythonPluginBridge.cpp)
-- [Pinned v2.5.0 loader](https://github.com/OrcaSlicer/OrcaSlicer/blob/v2.5.0/src/slic3r/plugin/PluginLoader.cpp)
+Automated tests and headless previews do not prove embedded-host compatibility. The [native acceptance checklist](roadmap.md)
+remains open under the user's instruction to proceed while away from the PC. Raw `.gcode` capture is implemented;
+the Bambu sliced-archive/Print plate seam still needs native investigation and is not claimed as supported.

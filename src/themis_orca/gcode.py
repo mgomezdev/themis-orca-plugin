@@ -1,6 +1,6 @@
 """Immutable export copies shared between the slicing hook and dock panel."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
 from threading import Lock
@@ -18,6 +18,8 @@ class GCodeSnapshot:
     digest: str
     plate_number: int = 1  # A raw G-code file is one already-sliced plate.
     objects: tuple = ()
+    facts: dict | None = None
+    system_profile: str | None = None
 
 
 def eligible_model(snapshot, references):
@@ -25,8 +27,10 @@ def eligible_model(snapshot, references):
     if not isinstance(snapshot, GCodeSnapshot) or not snapshot.profile:
         raise WorkflowError("The export has no printer profile. Export again with a configured printer preset.")
     known = {m.get("id") for m in references.models}
-    matches = {model for model, rows in references.mappings.items() if model in known and any(
-        r.get("provider_plugin_id") == "laminus" and r.get("machine_profile") == snapshot.profile for r in rows)}
+    def matching(profile):
+        return {model for model, rows in references.mappings.items() if model in known and any(
+            r.get("provider_plugin_id") == "laminus" and r.get("machine_profile") == profile for r in rows)}
+    matches = matching(snapshot.profile) or (matching(snapshot.system_profile) if snapshot.system_profile else set())
     if len(matches) != 1:
         raise WorkflowError("No unique Themis printer model matches this slice. Set an exact Laminus machine-profile mapping in Themis, then refresh.")
     model = matches.pop()
@@ -41,7 +45,7 @@ def eligible_model(snapshot, references):
 def eligible_printers(snapshot, references, model):
     # Match the resolved profile too: two printers of one model can have different nozzles.
     printers = [p for p in references.printers if p.get("model_uuid") == model
-                and p.get("machine_profile") == snapshot.profile]
+                and p.get("machine_profile") in {snapshot.profile,snapshot.system_profile}]
     if not printers:
         raise WorkflowError("No Themis printer uses this model and machine profile. Configure its profile/nozzle in Themis, then refresh.")
     return printers
@@ -56,7 +60,7 @@ class CaptureStore:
         self._attempted = set()
         self._active = set()
 
-    def capture(self, source, storage, name, profile):
+    def capture(self, source, storage, name, profile, *, facts=None):
         root = Path(storage) / "gcode-captures"
         root.mkdir(parents=True, exist_ok=True)
         path = root / (uuid4().hex + ".gcode")
@@ -71,7 +75,7 @@ class CaptureStore:
             # Names are display text only; neither page input nor output_name becomes a file path.
             name = str(name or "Exported G-code").replace("\\", "/").rsplit("/", 1)[-1][:255]
             profile = profile if isinstance(profile, str) else ""
-            row = GCodeSnapshot(path, uuid4().hex, name, profile, digest.hexdigest())
+            row = GCodeSnapshot(path, uuid4().hex, name, profile, digest.hexdigest(),facts=facts)
             with self._lock:
                 for prior in self._rows:
                     if (prior.digest, prior.profile) == (row.digest, row.profile):
@@ -92,12 +96,19 @@ class CaptureStore:
         with self._lock:
             return [(r, r.token in self._attempted) for r in reversed(self._rows)]
 
-    def acquire(self, token):
+    def set_system_profile(self, token, name):
+        with self._lock:
+            for index,row in enumerate(self._rows):
+                if row.token == token:
+                    self._rows[index] = replace(row,system_profile=name)
+                    return self._rows[index]
+
+    def acquire(self, token, *, allow_attempted=False):
         with self._lock:
             row = next((r for r in self._rows if r.token == token), None)
             if row is None:
                 raise WorkflowError("Choose a captured G-code export. Enable Themis: Capture G-code in the process preset and export G-code first.")
-            if token in self._attempted:
+            if token in self._attempted and not allow_attempted:
                 raise WorkflowError("This export was already submitted. Check Themis before sending more work.")
             self._active.add(token)
             return row

@@ -36,6 +36,20 @@
   <button id="refresh" type="button" disabled>Test connection &amp; refresh</button>
   <button id="cancel" type="button" class="quiet" hidden>Cancel refresh</button>
 </div>
+<details id="settings" open>
+  <summary>Connection settings</summary>
+  <form id="settings-form">
+    <label>Themis URL<input id="url" type="url" autocomplete="off" placeholder="https://themis.example.test" required></label>
+    <label>API key<input id="api-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Paste your Themis API key" aria-describedby="paste-note key-note"></label>
+    <label class="check"><input id="show-key" type="checkbox">Show entered API key</label>
+    <p id="paste-note" class="muted">Paste with Ctrl+V (Cmd+V on macOS). Show the entered key to select/copy it with Ctrl+C (Cmd+C). Saving clears the entered field; the stored key stays in Orca's configuration.</p>
+    <p id="key-note" class="muted">Your key is stored in Orca’s plugin configuration.</p>
+    <div class="actions">
+      <button id="save" type="submit">Save settings</button>
+      <button id="forget" type="button" class="quiet" disabled>Forget API key</button>
+    </div>
+  </form>
+</details>
 <section aria-labelledby="send-heading">
   <h2 id="send-heading">Send to Themis</h2>
   <div id="geometry-source">
@@ -46,6 +60,7 @@
   <form id="send-form">
     <label>Action<select id="action">
       <option value="job">Create a job for this plate</option>
+      <option value="gcode_job">Create a job from sliced G-code</option>
       <option value="existing_plate">Add plate to an existing project</option>
       <option value="existing_objects">Add objects to an existing project</option>
       <option value="new_plate">Add plate to a new project</option>
@@ -55,6 +70,10 @@
     </select></label>
     <div id="gcode-source" class="fields" hidden>
       <label>Captured G-code export<select id="capture-id" aria-describedby="gcode-note"></select></label>
+      <label>Printer model this G-code was sliced for<select id="gcode-model"></select></label>
+      <label class="check"><input id="associate-plate" type="checkbox">Remember this export as the current project/plate</label>
+      <p class="muted">Choose this only when the export belongs to the current plate. Orca's export hook does not supply a plate identity.</p>
+      <p class="muted">Defaults from the exported machine preset and its system parent. Choose the correct model explicitly if no unique match is available.</p>
       <p class="muted">Select Themis: Capture G-code in the process preset's slicing pipeline plugins, place it last, then export G-code. Capture stays local until you send it here. Choose the export by name; it may belong to a different plate than the current view.</p>
       <p class="muted">This captures raw .gcode. Printers that require a sliced .gcode.3mf archive cannot print this format through Themis.</p>
       <p id="gcode-note" role="status" aria-live="polite"></p>
@@ -69,6 +88,12 @@
       <label>Eligible printers and models<select id="targets" multiple></select></label>
       <p class="muted">Choose Any printer alone, or specific printers/models. Project imports get their own print group; earlier items keep their settings.</p>
       <label>Process preset<select id="process"></select></label>
+      <button id="load-defaults" type="button" class="quiet">Load inspected Orca preset settings</button>
+      <p id="preset-note" class="muted"></p>
+      <label>Bed margin per edge (mm)<input id="margin-mm" type="number" min="0" max="100" step="0.1" value="0"></label>
+      <label class="check"><input id="use-orca-materials" type="checkbox">Use per-filament requirements from Orca</label>
+      <label class="check"><input id="use-orca-presets" type="checkbox">Use per-filament catalog presets</label>
+      <label id="filament-map-row" hidden>Model filament requirements/presets (JSON)<textarea id="filament-map" rows="5" aria-describedby="preset-note"></textarea></label>
       <label class="check"><input id="use-filament" type="checkbox">Use a filament rule for imported items</label>
       <div id="filament-fields" class="fields" hidden>
         <label>Type<input id="filament-type" placeholder="PLA"></label>
@@ -79,23 +104,27 @@
       <label class="check"><input id="use-overrides" type="checkbox">Use process overrides</label>
       <label id="overrides-row" hidden>Overrides (JSON)<textarea id="overrides" rows="3" placeholder='{"layer_height": "0.2", "wall_loops": "3"}'></textarea></label>
       <p id="override-note" class="muted">Process overrides apply to this send.</p>
+      <label class="check"><input id="use-target-overrides" type="checkbox">Use overrides for individual eligible printers/models</label>
+      <label id="target-overrides-row" hidden>Overrides by target key (JSON)<textarea id="target-overrides" rows="4" placeholder='{"5":{"wall_loops":"4"}}'></textarea></label>
+      <p class="muted">Target keys are shown in the eligible-printer picker. Target overrides win over this send's common overrides.</p>
+      <label>Preferred printer/model<select id="preference-add"></select></label>
+      <button id="preference-append" type="button" class="quiet">Add to preference order</button>
+      <ol id="preference-list" aria-label="Printer preference order"></ol>
+      <label class="check"><input id="preference-strict" type="checkbox">Only these preferred printers/models, with no fallback</label>
+      <p class="muted">Idle preferred printers get first chance. A busy or ineligible preferred printer does not delay fallback. Preferences never expand eligibility.</p>
     </div></details>
     <button id="send" type="submit" disabled>Send inspected copy</button>
   </form>
   <p id="send-result" role="status" aria-live="polite"></p>
+  <label>Saved sends on this server<select id="history-choice"></select></label>
+  <p id="history-note" role="status" aria-live="polite"></p>
+  <div class="actions">
+    <button id="lookup-send" type="button" class="quiet" disabled>Refresh send status</button>
+    <button id="retry-send" type="button" class="quiet" disabled>Retry saved send</button>
+    <button id="new-send" type="button" class="quiet" disabled>Send as new</button>
+    <a id="history-open" target="_blank" rel="noopener noreferrer" hidden>Open in Themis</a>
+  </div>
 </section>
-<details id="settings" open>
-  <summary>Connection settings</summary>
-  <form id="settings-form">
-    <label>Themis URL<input id="url" type="url" autocomplete="off" placeholder="https://themis.example.test" required></label>
-    <label>API key<input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Enter an API key"></label>
-    <p id="key-note" class="muted">Your key is stored in Orca’s plugin configuration.</p>
-    <div class="actions">
-      <button id="save" type="submit">Save settings</button>
-      <button id="forget" type="button" class="quiet" disabled>Forget API key</button>
-    </div>
-  </form>
-</details>
 <section aria-labelledby="data-heading">
   <h2 id="data-heading">Available in Themis</h2>
   <p id="data-note" class="muted">Test the connection to load printer models, presets, and projects.</p>
@@ -112,10 +141,37 @@
   let choicesKey = '';
   let snapshotKey = '';
   let capturesKey = '';
+  let historyKey = '';
+  let preferenceKeys = [];
   el('action').value = 'job';
   el('quantity').value = '1';
   const send = command => orca.postMessage({command});
   const selected = id => Array.from(el(id).selectedOptions || [], option => option.value);
+  const isGcode = action => action === 'gcode_job' || action.endsWith('gcode');
+  function activeHistory() {
+    if (latestState.history_selected || !isGcode(el('action').value)) return latestState.history;
+    return ((latestState.captures || []).find(c => c.id === el('capture-id').value) || {}).history;
+  }
+  function preferenceList() {
+    const choices = latestState.choices || {printers:[],models:[]};
+    const labels = Object.fromEntries([...choices.printers.map(p=>[String(p.id),p.name]),...choices.models.map(m=>['model:'+m.id,m.name])]);
+    el('preference-list').replaceChildren();
+    preferenceKeys.forEach((key,index) => {
+      const row = document.createElement('li');
+      const label = document.createElement('span'); label.textContent = labels[key] || 'Unavailable target'; row.append(label);
+      for (const [text,delta] of [['Move up',-1],['Move down',1],['Remove',0]]) {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = text;
+        button.disabled = !!latestState.busy || (delta && (index+delta < 0 || index+delta >= preferenceKeys.length));
+        button.addEventListener('click',() => {
+          if (delta) [preferenceKeys[index],preferenceKeys[index+delta]] = [preferenceKeys[index+delta],preferenceKeys[index]];
+          else preferenceKeys.splice(index,1);
+          preferenceList();
+        });
+        row.append(button);
+      }
+      el('preference-list').append(row);
+    });
+  }
   function options(id, rows, defaults = []) {
     const previous = selected(id);
     const wanted = previous.length ? previous : defaults;
@@ -128,15 +184,17 @@
   }
   function controls() {
     const action = el('action').value;
-    const job = action === 'job';
-    const gcode = action.endsWith('gcode');
+    const job = action === 'job' || action === 'gcode_job';
+    const gcode = isGcode(action);
     const capture = (latestState.captures || []).find(c => c.id === el('capture-id').value);
+    const history = activeHistory();
     el('geometry-source').hidden = gcode;
     el('geometry-settings').hidden = gcode;
     el('gcode-source').hidden = !gcode;
-    el('gcode-note').textContent = capture ? (capture.error || `Printer profile: ${capture.profile}. Eligible printers: ${(capture.printers || []).join(', ')}. Model: ${capture.model}.`)
+    const chosenModel = ((latestState.choices || {}).models || []).find(m=>m.id === el('gcode-model').value);
+    el('gcode-note').textContent = capture ? (chosenModel ? `Printer profile: ${capture.profile}. Eligible model: ${chosenModel.name}. Matching printers now: ${(capture.printers || []).join(', ') || 'none registered'}.` : capture.error || 'Choose the printer model this G-code was sliced for.')
       + (capture.attempted ? ' This export was already submitted. Check Themis for its result.' : ' G-code is added as-is; slicing settings are already baked in.') : 'No export selected. Capture an export before sending.';
-    el('send').textContent = gcode ? 'Send captured G-code' : 'Send inspected copy';
+    el('send').textContent = history ? 'Update previous send' : gcode ? 'Send captured G-code' : 'Send inspected copy';
     el('project-row').hidden = !action.startsWith('existing');
     el('name-row').hidden = !action.startsWith('new');
     el('objects-row').hidden = !action.endsWith('objects');
@@ -144,14 +202,28 @@
     if (job) el('quantity').value = '1';
     el('filament-fields').hidden = !el('use-filament').checked;
     el('overrides-row').hidden = !el('use-overrides').checked;
+    el('target-overrides-row').hidden = !el('use-target-overrides').checked;
+    el('filament-map-row').hidden = !el('use-orca-materials').checked && !el('use-orca-presets').checked;
     el('override-note').textContent = (job ? 'Applies to this job. ' : 'Applies to this import group and its future jobs; earlier project items keep their settings. ') + 'Supported keys: layer_height, wall_loops, top_shell_layers, bottom_shell_layers, sparse_infill_density, sparse_infill_pattern, enable_support, support_type, support_threshold_angle, support_on_build_plate_only, raft_layers, brim_type, brim_width, ironing_type.';
-    el('send').disabled = !!latestState.busy || !latestState.choices || !latestState.configured
-      || (gcode ? !capture || !!capture.error || !!capture.attempted : !latestState.snapshot || !!latestState.send_attempted);
+    const unavailable = !!latestState.busy || !latestState.choices || !latestState.configured
+      || (gcode ? !capture || !el('gcode-model').value : !latestState.snapshot);
+    el('send').disabled = unavailable || !!history && !history.can_update && history.state !== 'preparing';
+    el('new-send').disabled = unavailable;
+    el('new-send').hidden = !history;
+    el('lookup-send').disabled = !!latestState.busy || !history;
+    el('retry-send').disabled = !!latestState.busy || !history || !history.can_retry;
+    el('history-note').textContent = history ? `Saved ${history.kind || 'work'}: ${history.created && history.created.job_id ? 'job #'+history.created.job_id : history.created && history.created.project_id ? 'project #'+history.created.project_id : 'pending'}. Last known status: ${history.status || history.state || 'unknown'}. ${history.can_update ? 'Inspect/capture the replacement source, then Update.' : 'Refresh status, retry a saved request, or Send as new.'}` : 'No saved send selected. A stable send identity is saved before uploading.';
+    const created = history && history.created || {};
+    const recordId = created.job_id || created.project_id;
+    el('history-open').hidden = !recordId;
+    if (recordId && Number.isInteger(recordId) && recordId > 0) el('history-open').href = (latestState.url || '').replace(/\/api\/v1\/?$/, '') + (created.job_id ? '/jobs/' : '/projects/') + recordId;
+    preferenceList();
   }
   function render(state) {
     latestState = state;
     if (!initialized) {
       el('url').value = state.url || '';
+      el('settings').open = !state.configured;
       initialized = true;
     }
     keySet = !!state.key_set;
@@ -162,10 +234,13 @@
     el('notice').textContent = state.notice || '';
     el('refresh').disabled = !!state.busy || !state.configured;
     el('cancel').hidden = !state.busy || !!state.send_busy;
-    for (const id of ['save', 'forget', 'url', 'api-key']) el(id).disabled = !!state.busy;
+    for (const id of ['save', 'forget', 'url', 'api-key','show-key']) el(id).disabled = !!state.busy;
     el('forget').disabled = !!state.busy || !keySet;
     if (state.settings_saved) {
+      el('settings').open = !state.configured;
       el('api-key').value = '';
+      el('show-key').checked = false;
+      el('api-key').type = 'password';
       el('url').value = state.url || '';
     }
     const counts = el('counts');
@@ -187,7 +262,9 @@
       choicesKey = nextChoices;
       const choices = state.choices || {projects: [], printers: [], models: [], processes: []};
       options('project-id', [['', 'Choose a project'], ...choices.projects.map(p => [p.id, p.name])]);
-      options('targets', [['any', 'Any printer'], ...choices.printers.map(p => [p.id, `Printer: ${p.name}`]), ...choices.models.map(m => [`model:${m.id}`, `Model: ${m.name}`])], ['any']);
+      options('targets', [['any', 'Any printer'], ...choices.printers.map(p => [p.id, `Printer: ${p.name} (key ${p.id})`]), ...choices.models.map(m => [`model:${m.id}`, `Model: ${m.name} (key model:${m.id})`])], ['any']);
+      options('preference-add', [['','Choose a printer/model'],...choices.printers.map(p=>[p.id,p.name]),...choices.models.map(m=>['model:'+m.id,m.name])]);
+      options('gcode-model', [['','Choose the sliced printer model'],...choices.models.map(m=>[m.id,m.name])]);
       options('process', [['', 'Ignore: let Themis decide'], ...choices.processes.map(name => [name, name])]);
     }
     const nextSnapshot = JSON.stringify(state.snapshot || null);
@@ -196,7 +273,8 @@
       const objects = state.snapshot ? state.snapshot.objects : [];
       options('object-ids', objects.map(o => [o.id, `${o.name} (${o.instances} instance(s))`]), objects.map(o=>o.id));
     }
-    el('snapshot-note').textContent = state.snapshot ? `Inspected plate ${state.snapshot.plate_number}: ${state.snapshot.objects.length} object(s). This copy will be sent; inspect again after edits.` : 'Inspect a copy of the plate before choosing what to send.';
+    const bed = state.snapshot && state.snapshot.min_bed_mm;
+    el('snapshot-note').textContent = state.snapshot ? `Inspected plate ${state.snapshot.plate_number}: ${state.snapshot.objects.length} object(s).${bed ? ` Required bed: ${bed.x.toFixed(1)} × ${bed.y.toFixed(1)} × ${bed.z.toFixed(1)} mm, before margin.` : ''} This copy will be sent; inspect again after edits.` : 'Inspect a copy of the plate before choosing what to send.';
     el('inspect').disabled = !!state.busy;
     const captures = state.captures || [];
     const nextCaptures = JSON.stringify(captures);
@@ -208,9 +286,20 @@
       el('capture-id').value = captures.some(c => c.id === previousCapture) ? previousCapture : '';
     }
     el('capture-id').disabled = !!state.busy;
+    el('gcode-model').disabled = !!state.busy;
+    el('associate-plate').disabled = !!state.busy;
     el('clear-captures').disabled = !!state.busy || !captures.length;
     el('capture-error').textContent = state.capture_error || '';
-    for (const id of ['action','project-id','project-name','object-ids','targets','process','use-filament','filament-type','filament-subtype','filament-color','filament-manufacturer','use-overrides','overrides']) el(id).disabled = !!state.busy;
+    const defaults = state.preset_defaults;
+    el('load-defaults').disabled = !!state.busy || !defaults;
+    el('preset-note').textContent = state.preset_error || (defaults ? [...defaults.warnings, defaults.unsupported.length ? 'Unsupported differences are not copied: '+defaults.unsupported.join(', ')+'.' : 'Orca preset differences use the supported setting keys. Review per-filament entries for the selected plate.'].join(' ') : 'Inspect the plate to load Orca preset defaults.');
+    const nextHistory = JSON.stringify(state.history_choices || []);
+    if (nextHistory !== historyKey) {
+      historyKey = nextHistory;
+      options('history-choice',[['','Current plate/export'],...(state.history_choices || []).map(h=>[h.key,h.label+' ('+h.send_id.slice(0,8)+')'])]);
+    }
+    el('history-choice').value = state.history_choice || '';
+    for (const id of ['action','project-id','project-name','object-ids','targets','process','margin-mm','use-filament','filament-type','filament-subtype','filament-color','filament-manufacturer','use-overrides','overrides','use-orca-materials','use-orca-presets','filament-map','use-target-overrides','target-overrides','preference-add','preference-append','preference-strict','history-choice']) el(id).disabled = !!state.busy;
     const created = state.send_result ? state.send_result.created || {} : {};
     const records = [];
     if (created.job_id) records.push(`Job #${created.job_id}`);
@@ -230,14 +319,34 @@
   el('refresh').addEventListener('click', () => send('refresh'));
   el('cancel').addEventListener('click', () => send('cancel'));
   el('forget').addEventListener('click', () => send('forget'));
+  el('show-key').addEventListener('change',()=> { el('api-key').type = el('show-key').checked ? 'text' : 'password'; });
   el('inspect').addEventListener('click', () => send('inspect'));
   el('clear-captures').addEventListener('click', () => send('clear_captures'));
-  for (const id of ['action','capture-id','use-filament','use-overrides']) el(id).addEventListener('change', controls);
-  el('send-form').addEventListener('submit', event => {
-    event.preventDefault();
-    if (el('action').value.endsWith('gcode')) {
+  for (const id of ['action','use-filament','use-overrides','use-orca-materials','use-orca-presets','use-target-overrides','gcode-model']) el(id).addEventListener('change', controls);
+  el('capture-id').addEventListener('change',() => {
+    const capture = (latestState.captures || []).find(c=>c.id === el('capture-id').value);
+    el('gcode-model').value = capture && capture.model_id || ''; controls();
+  });
+  el('preference-append').addEventListener('click',()=> {
+    const key = el('preference-add').value;
+    if (key && !preferenceKeys.includes(key)) preferenceKeys.push(key);
+    preferenceList();
+  });
+  el('load-defaults').addEventListener('click',()=> {
+    const defaults = latestState.preset_defaults; if (!defaults) return;
+    el('process').value = defaults.process || '';
+    el('overrides').value = JSON.stringify(defaults.overrides,null,2);
+    el('filament-map').value = JSON.stringify(defaults.filaments,null,2);
+  });
+  el('history-choice').addEventListener('change',()=>orca.postMessage({command:'choose_history',key:el('history-choice').value}));
+  el('lookup-send').addEventListener('click',()=>orca.postMessage({command:'lookup_send',key:activeHistory() && activeHistory().key}));
+  el('retry-send').addEventListener('click',()=>orca.postMessage({command:'retry_send',key:activeHistory() && activeHistory().key}));
+  function submit(disposition) {
+    const history = activeHistory();
+    const destination = {disposition:disposition || (history ? 'update' : 'new'),history_key:history && history.key};
+    if (isGcode(el('action').value)) {
       orca.postMessage({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
-        project_name:el('project-name').value, capture_id:el('capture-id').value, quantity:el('quantity').value}});
+        project_name:el('project-name').value, capture_id:el('capture-id').value, gcode_model:el('gcode-model').value, associate_plate:!!el('associate-plate').checked, quantity:el('quantity').value,...destination}});
       return;
     }
     let overrides = {};
@@ -245,12 +354,24 @@
       try { overrides = JSON.parse(el('overrides').value || '{}'); }
       catch (_) { el('notice').textContent = 'Overrides must be a JSON object, for example {"layer_height":"0.2"}.'; return; }
     }
+    let targetOverrides = {}, filamentMap = null;
+    try {
+      if (el('use-target-overrides').checked) targetOverrides = JSON.parse(el('target-overrides').value || '{}');
+      if (el('use-orca-materials').checked || el('use-orca-presets').checked) {
+        const entries = JSON.parse(el('filament-map').value || '[]');
+        if (!Array.isArray(entries)) throw Error('list required');
+        filamentMap = entries.map(entry=>Object.fromEntries(Object.entries(entry).filter(([key])=>key === 'model_filament' || (key === 'filament_profile' ? el('use-orca-presets').checked : el('use-orca-materials').checked))));
+      }
+    } catch (_) { el('notice').textContent = 'Check the target overrides and filament JSON before sending.'; return; }
     orca.postMessage({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
       project_name:el('project-name').value, object_ids:selected('object-ids'), quantity:el('quantity').value,
-      targets:selected('targets'), process:el('process').value || '', use_filament:!!el('use-filament').checked,
+      targets:selected('targets'), process:el('process').value || '', margin_mm:el('margin-mm').value || '0', use_filament:!!el('use-filament').checked,
       filament_type:el('filament-type').value, filament_subtype:el('filament-subtype').value,
-      filament_color:el('filament-color').value, filament_manufacturer:el('filament-manufacturer').value, overrides}});
-  });
+      filament_color:el('filament-color').value, filament_manufacturer:el('filament-manufacturer').value, overrides,
+      target_overrides:targetOverrides,filament_map:filamentMap,preference:preferenceKeys,preference_strict:!!el('preference-strict').checked,...destination}});
+  }
+  el('send-form').addEventListener('submit',event=> { event.preventDefault(); submit(); });
+  el('new-send').addEventListener('click',()=>submit('new'));
   send('ready');
   const timer = setInterval(() => send('poll'), 750);
   window.addEventListener('pagehide', () => clearInterval(timer));

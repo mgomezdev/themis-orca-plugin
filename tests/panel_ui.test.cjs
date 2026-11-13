@@ -65,6 +65,8 @@ test('save submits credentials only to the host and clears the field after succe
   assert.equal(p.elements['api-key'].value, '');
   assert.match(p.elements['api-key'].placeholder, /Leave blank/);
   assert.match(html, /id="api-key" type="password"/);
+  assert.match(html, /Paste with Ctrl\+V/);
+  for (const event of ['paste','copy','cut','keydown','beforeinput']) assert.equal(p.elements['api-key'].handlers[event],undefined);
 });
 
 test('status, collection labels and errors render as text, never HTML', () => {
@@ -122,8 +124,8 @@ test('project overrides stay selected and explain their import-group scope', () 
 
 test('sliced G-code destinations require a captured export with proven automatic eligibility', () => {
   const p = page();
-  const capture = {id:'slice-1',name:'part.gcode',profile:'Printer 0.4 nozzle',model:'Printer',printers:['P'],error:'',attempted:false};
-  const state = {choices:{projects:[{id:7,name:'P'}],printers:[],models:[],processes:[]},captures:[capture]};
+  const capture = {id:'slice-1',name:'part.gcode',profile:'Printer 0.4 nozzle',model:'Printer',model_id:'model-a',printers:['P'],error:'',attempted:false};
+  const state = {choices:{projects:[{id:7,name:'P'}],printers:[],models:[{id:'model-a',name:'Printer'}],processes:[]},captures:[capture]};
   p.state(state);
   for (const action of ['existing_gcode','new_gcode']) {
     p.elements.action.value = action; p.elements.action.fire('change');
@@ -136,12 +138,59 @@ test('sliced G-code destinations require a captured export with proven automatic
   }
   p.elements['capture-id'].value = 'slice-1'; p.elements['capture-id'].fire('change');
   assert.equal(p.elements.send.disabled, false);
-  assert.match(p.elements['gcode-note'].textContent, /Eligible printers: P/);
+  assert.match(p.elements['gcode-note'].textContent, /Eligible model: Printer/);
   p.elements['use-overrides'].checked = true; p.elements.overrides.value = 'invalid json from previous geometry action';
   p.elements['project-name'].value = 'Sliced'; p.elements['send-form'].fire('submit');
-  assert.deepEqual(p.messages.at(-1), {command:'send',workflow:{action:'new_gcode',project_id:'',project_name:'Sliced',capture_id:'slice-1',quantity:'1'}});
+  assert.deepEqual(p.messages.at(-1), {command:'send',workflow:{action:'new_gcode',project_id:'',project_name:'Sliced',capture_id:'slice-1',gcode_model:'model-a',associate_plate:false,quantity:'1',disposition:'new'}});
   p.state(state); assert.equal(p.elements['capture-id'].value, 'slice-1');
-  p.state({...state,captures:[{...capture,error:'No unique mapping'}]}); assert.equal(p.elements.send.disabled,true);
-  p.state({...state,captures:[{...capture,attempted:true}]}); assert.equal(p.elements.send.disabled,true);
+  p.state({...state,captures:[{...capture,error:'No unique mapping'}]});
+  p.elements['gcode-model'].value = ''; p.elements['gcode-model'].fire('change'); assert.equal(p.elements.send.disabled,true);
+  p.elements['gcode-model'].value = 'model-a'; p.elements['gcode-model'].fire('change'); assert.equal(p.elements.send.disabled,false);
   p.elements['clear-captures'].fire('click'); assert.deepEqual(p.messages.at(-1),{command:'clear_captures'});
+});
+
+test('entered API key supports revealing for native copy and masks again after save', () => {
+  const p = page(); p.state();
+  p.elements['api-key'].value = 'pasted-key';
+  p.elements['show-key'].checked = true; p.elements['show-key'].fire('change');
+  assert.equal(p.elements['api-key'].type,'text');
+  assert.equal(p.elements['api-key'].value,'pasted-key');
+  p.elements['settings-form'].fire('submit');
+  assert.equal(p.messages.at(-1).api_key,'pasted-key');
+  p.state({settings_saved:true});
+  assert.equal(p.elements['api-key'].type,'password');
+  assert.equal(p.elements['api-key'].value,'');
+  assert.equal(p.elements['show-key'].checked,false);
+});
+
+test('Orca defaults, per-filament Use/Ignore and preference order reach the workflow', () => {
+  const p = page();
+  p.state({choices:{projects:[],printers:[{id:5,name:'First'},{id:6,name:'Second'}],models:[],processes:['Standard']},
+    snapshot:{plate_number:1,objects:[],min_bed_mm:{x:300,y:200,z:100}},preset_defaults:{process:'Standard',overrides:{wall_loops:'3'},
+      filaments:[{model_filament:1,filament_type:'PLA',filament_subtype:'any',filament_profile:'PLA preset'}],warnings:[],unsupported:[]}});
+  p.elements['load-defaults'].fire('click');
+  p.elements['use-orca-presets'].checked = true;
+  p.elements['preference-add'].value = '5'; p.elements['preference-append'].fire('click');
+  p.elements['preference-add'].value = '6'; p.elements['preference-append'].fire('click');
+  p.elements['preference-list'].children[1].children[1].fire('click'); // Move Second up.
+  p.elements['preference-strict'].checked = true;
+  p.elements['send-form'].fire('submit');
+  const workflow = p.messages.at(-1).workflow;
+  assert.deepEqual(workflow.preference,['6','5']);
+  assert.equal(workflow.preference_strict,true);
+  assert.deepEqual(workflow.filament_map,[{model_filament:1,filament_profile:'PLA preset'}]);
+  assert.match(p.elements['snapshot-note'].textContent,/300.0/);
+});
+
+test('saved sends offer safe retry, update, new copy and Themis navigation', () => {
+  const p = page();
+  const history = {key:'source',send_id:'uuid',kind:'job',created:{job_id:50},status:'queued',state:'sent',can_update:true,can_retry:false};
+  p.state({choices:{projects:[],printers:[],models:[],processes:[]},snapshot:{plate_number:1,objects:[]},history});
+  assert.equal(p.elements.send.textContent,'Update previous send');
+  assert.equal(p.elements['history-open'].href,'https://themis.test/jobs/50');
+  p.elements['lookup-send'].fire('click'); assert.deepEqual(p.messages.at(-1),{command:'lookup_send',key:'source'});
+  p.elements['new-send'].fire('click'); assert.equal(p.messages.at(-1).workflow.disposition,'new');
+  p.state({choices:{projects:[],printers:[],models:[],processes:[]},snapshot:{plate_number:1,objects:[]},history:{...history,can_update:false,state:'uncertain',can_retry:true}});
+  assert.equal(p.elements.send.disabled,true); assert.equal(p.elements['retry-send'].disabled,false);
+  p.elements['retry-send'].fire('click'); assert.deepEqual(p.messages.at(-1),{command:'retry_send',key:'source'});
 });
