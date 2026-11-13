@@ -7,6 +7,7 @@ The user selected a standalone `orca-plugin` repository, superseding the earlier
 1. BIZ-379: package, configuration, connection test, docked panel and reference data.
 2. BIZ-380: capture G-code on the slicing worker, then send unchanged bytes for a selected printer model.
 3. BIZ-381: export geometry, resolve plate membership, calculate footprint, optional filaments/presets.
+   The pure world-space footprint calculation is implemented separately; see [its input contract](geometry.md).
 4. BIZ-382: per-target preset differences and ordered printer preferences.
 5. BIZ-383: persist send identity and update previous sends.
 
