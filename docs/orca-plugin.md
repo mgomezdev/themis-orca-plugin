@@ -13,9 +13,12 @@ The reference loader preserves successful collections when another fails and ski
 The refresh worker polls through a result queue without invoking host APIs off-thread. Duplicate in-flight refreshes
 are rejected. Cancellation discards the old result and stops further requests after the current socket operation completes.
 
-The docked panel, custom settings page, current-plate display, asynchronous connection test, and sending are still to be implemented.
-The current Script action performs one synchronous request with a 10-second socket timeout on Orca's UI thread.
-Do not treat this development wheel as a production release. Installation and network prompts still need verification inside Orca 2.5.0.
+The docked panel, custom settings page, current-plate display, and sending are still to be implemented.
+The current Script action performs one synchronous request with a 10-second socket timeout. In the verified 2.5.0 source
+baseline, Orca runs Script actions on a host-owned worker, so this request does not run on the UI thread.
+Panel `on_message` callbacks do run on the UI thread and will use the separate background refresh helper.
+Do not treat this development wheel as a production release. Plugin loading and network prompts still need verification inside Orca 2.5.0.
+See [the pinned reference review and verification record](orca-2.5-reference.md) for official examples and wiki discrepancies.
 
 ## Local setup and checks
 
@@ -45,7 +48,8 @@ Importing that package registers the plugin only when the embedded `orca` module
 
    The URL may be the deployment root or include `/api/v1`. Reverse-proxy prefixes are supported.
    URL credentials, queries, and fragments are rejected. HTTP is supported for local deployments; use HTTPS for remote connections.
-4. Run the capability. Approve access only to your configured Themis endpoint when Orca prompts.
+4. Run the capability. Approve access only to your configured Themis endpoint when Orca prompts, then retry if the first
+   attempt was denied while the prompt was being displayed. Off-main-thread audit events fail closed on first use.
 
 The plugin makes no network calls during discovery and requests no wildcard network permission.
 Capability config is unavailable during package registration, so this initial implementation relies on Orca's first-use audit prompt for the actual URL.
@@ -84,8 +88,8 @@ Automated tests exercise real HTTP requests against a local test server, complet
 scope/error handling, cancellation, duplicate-refresh protection, URL validation, and discovery/config/run against an `orca` stub.
 They do not prove embedded-host compatibility.
 
-Before marking BIZ-379 done: install the wheel in Orca 2.5.0, check reload/unload, verify actual permission prompts,
-add a masked custom settings editor and nonblocking test, build the docked Prepare/Preview panel,
+Before marking BIZ-379 done: verify wheel discovery/loading in Orca 2.5.0, check reload/unload, verify actual permission prompts,
+add a masked custom settings editor with connection testing, build the docked Prepare/Preview panel,
 show current plate and refresh reference data. Sending waits for the relevant backend contracts in [the roadmap](roadmap.md).
 
 ## Orca API references

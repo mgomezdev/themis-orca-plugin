@@ -22,7 +22,10 @@ Do not invent routes or silently emulate these missing backend guarantees. Confi
 
 ## Host constraints
 
-Target Orca 2.5.x. Use host-owned UI. Export 3MF on the UI thread. Plate membership must come from the exported `Metadata/model_settings.config`. G-code capture uses `psGCodePostProcess` with the plugin enabled in the process preset; no UI calls from that worker. A normal completion event does not provide G-code bytes.
+Target Orca 2.5.x, with the exact host build recorded during verification. Use host-owned UI. Export 3MF through the supported UI-thread path. Plate membership must come from the exported `Metadata/model_settings.config`. G-code capture uses `psGCodePostProcess` with the plugin enabled in the process preset; no UI calls from that worker. A normal completion event does not provide G-code bytes.
+
+In v2.5.0 build `40ecc66f`, Script actions run on a host-owned worker; panel message callbacks run on the UI thread.
+The official wiki has stale descriptions of this behavior. Follow the [pinned source review](orca-2.5-reference.md).
 
 ## Sources
 
