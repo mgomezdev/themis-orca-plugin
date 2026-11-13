@@ -6,7 +6,12 @@ This is the first BIZ-379 development slice, not the complete BIZ-151 integratio
 The wheel registers **Themis: Test connection**, a Script capability. The plugin has no third-party runtime dependencies.
 It reads the deployment URL and API key from Orca's built-in capability configuration and tests `GET /api/v1/auth/me`.
 The host displays a result with the role and missing scopes. Core client methods also cover printer models, printers,
-per-model slicer-profile mappings, the Laminus catalog, and projects; no automatic reference-data refresh is wired yet.
+per-model slicer-profile mappings, the Laminus catalog, and projects. The independent reference loader and background
+refresh worker are implemented and tested, but are not yet connected to a panel.
+
+The reference loader preserves successful collections when another fails and skips endpoints for missing read scopes.
+The refresh worker polls through a result queue without invoking host APIs off-thread. Duplicate in-flight refreshes
+are rejected. Cancellation discards the old result and stops further requests after the current socket operation completes.
 
 The docked panel, custom settings page, current-plate display, asynchronous connection test, and sending are still to be implemented.
 The current Script action performs one synchronous request with a 10-second socket timeout on Orca's UI thread.
@@ -14,7 +19,8 @@ Do not treat this development wheel as a production release. Installation and ne
 
 ## Local setup and checks
 
-Requires Python 3.12 or newer. CI checks 3.12 and 3.13.
+Requires Python 3.12 or newer. CI checks 3.12 and 3.13 on Windows and Linux, builds the wheel,
+and installs/imports the built wheel in isolated mode so source-tree imports cannot hide packaging errors.
 
 ```powershell
 python -m venv .venv
@@ -74,8 +80,9 @@ Reporting the actual staff key owner requires a backend identity contract change
 
 ## Verification boundaries and next work
 
-Automated tests exercise real HTTP requests against a local test server, scope/error handling, URL validation,
-and discovery/config/run against an `orca` stub. They do not prove embedded-host compatibility.
+Automated tests exercise real HTTP requests against a local test server, complete background reference refresh,
+scope/error handling, cancellation, duplicate-refresh protection, URL validation, and discovery/config/run against an `orca` stub.
+They do not prove embedded-host compatibility.
 
 Before marking BIZ-379 done: install the wheel in Orca 2.5.0, check reload/unload, verify actual permission prompts,
 add a masked custom settings editor and nonblocking test, build the docked Prepare/Preview panel,
