@@ -15,6 +15,7 @@ def server():
         status = 200
         payload = {"role": "staff", "local": False, "scopes": sorted(REFERENCE_SCOPES | SEND_SCOPES)}
         seen = []
+        routes = {}
 
         def log_message(self, *args):
             pass
@@ -26,7 +27,8 @@ def server():
             if self.status == 302:
                 self.send_header("Location", "/redirected")
             self.end_headers()
-            data = self.payload if isinstance(self.payload, bytes) else json.dumps(self.payload).encode()
+            payload = self.routes.get(self.path, self.payload)
+            data = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
             self.wfile.write(data)
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -119,3 +121,46 @@ def test_reference_routes(server):
         "/api/v1/printer-models?enabled=true&usable=true", "/api/v1/printers",
         f"/api/v1/printer-models/{model}/slicer-profiles", "/api/v1/laminus/catalog", "/api/v1/projects",
     ]
+
+
+def test_background_refresh_uses_real_http_and_collects_all_reference_data(server):
+    from themis_orca.refresh import BackgroundRefresh
+
+    handler, client = server
+    model_id = "9d9c970e-1985-43cc-ae53-1b8899230c96"
+    handler.routes = {
+        "/api/v1/printer-models?enabled=true&usable=true": [{"id": model_id, "display_name": "P1S"}],
+        "/api/v1/printers": [{"id": 10, "name": "Printer 10"}],
+        "/api/v1/projects": [{"id": 5, "name": "Project 5"}],
+        "/api/v1/laminus/catalog": {"machine": [], "process": [{"name": "Standard"}], "filament": []},
+        f"/api/v1/printer-models/{model_id}/slicer-profiles": [{"machine_profile": "P1S 0.4"}],
+    }
+    refresh = BackgroundRefresh()
+    assert refresh.start(client.settings)
+    refresh._worker.join(timeout=2)
+    assert not refresh.busy
+    result = refresh.poll()
+    assert result.error is None
+    assert result.references.models[0]["id"] == model_id
+    assert result.references.printers[0]["id"] == 10
+    assert result.references.projects[0]["id"] == 5
+    assert result.references.catalog["process"] == [{"name": "Standard"}]
+    assert result.references.mappings[model_id] == [{"machine_profile": "P1S 0.4"}]
+    assert not result.references.errors
+    assert len(handler.seen) == 6
+    assert all(key == "private-test-key" for _, key in handler.seen)
+
+
+def test_background_refresh_with_no_read_scopes_requests_only_identity(server):
+    from themis_orca.refresh import BackgroundRefresh
+
+    handler, client = server
+    handler.payload = {"role": "staff", "local": False, "scopes": []}
+    refresh = BackgroundRefresh()
+    refresh.start(client.settings)
+    refresh._worker.join(timeout=2)
+    assert not refresh.busy
+    result = refresh.poll()
+    assert result.error is None
+    assert set(result.references.errors) == {"models", "printers", "projects", "catalog"}
+    assert handler.seen == [("/api/v1/auth/me", "private-test-key")]
