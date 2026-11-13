@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import isfinite
 
 
-ACTIONS = {"job", "existing_plate", "existing_objects", "new_plate", "new_objects"}
+ACTIONS = {"job", "existing_plate", "existing_objects", "new_plate", "new_objects", "existing_gcode", "new_gcode"}
 OVERRIDE_KEYS = frozenset({"enable_support", "support_type", "support_threshold_angle", "support_on_build_plate_only",
     "raft_layers", "brim_type", "brim_width", "sparse_infill_density", "sparse_infill_pattern", "wall_loops",
     "top_shell_layers", "bottom_shell_layers", "layer_height", "ironing_type"})
@@ -38,6 +38,7 @@ class SendPlan:
     process: str
     filament: dict
     overrides: dict
+    gcode_model: str | None = None
 
     def job_payload(self, file_id):
         common = {"print_profile": self.process, **self.filament}
@@ -59,6 +60,8 @@ class SendPlan:
 
     def item_payloads(self, file_id, group_id):
         common = {"file_id": file_id, "group_id": group_id, **self.filament}
+        if self.gcode_model:
+            return [{**common, "kind": "gcode", "source_ref": "1", "quantity": self.quantity, "pack_rule": "locked"}]
         if self.action.endswith("objects"):
             return [{**common, "kind": "3mf_object", "source_ref": object_id, "quantity": copies * self.quantity}
                     for object_id, copies in self.objects]
@@ -84,6 +87,15 @@ def build_plan(data, snapshot, references):
     quantity = positive(data.get("quantity", 1), "quantity")
     if quantity > 10000 or (action == "job" and quantity != 1):
         raise WorkflowError("A plate job has quantity 1; project quantities must be at most 10000.")
+    from .gcode import GCodeSnapshot, eligible_model, eligible_printers
+    if action.endswith("gcode"):
+        if data.get("overrides") or data.get("process") or data.get("use_filament") or data.get("targets"):
+            raise WorkflowError("G-code settings are already baked in. Eligibility is set automatically from the exported printer profile.")
+        model = eligible_model(snapshot, references)
+        targets = tuple(str(positive(p.get("id"), "eligible printer")) for p in eligible_printers(snapshot, references, model))
+        return SendPlan(action, project_id, name, 1, (), quantity, targets, "", {}, {}, model)
+    if isinstance(snapshot, GCodeSnapshot):
+        raise WorkflowError("Inspect a geometry plate for this action, or choose a G-code project action.")
     known_objects = {o["id"]: o["instances"] for o in snapshot.objects}
     selected = data.get("object_ids", [])
     if not isinstance(selected, list) or not all(isinstance(o, str) for o in selected):

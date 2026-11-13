@@ -13,8 +13,11 @@ def execute_send(client, snapshot, plan, send_id):
     try:
         if plan.action != "job" and plan.overrides and not client.supports_project_overrides():
             raise ThemisError("This Themis version cannot save project overrides. Update Themis before sending with overrides.")
-        file_id = positive(client.upload(snapshot.path).get("id"), "uploaded file ID")
+        uploaded = client.upload(snapshot.path, gcode_model=plan.gcode_model) if plan.gcode_model else client.upload(snapshot.path)
+        file_id = positive(uploaded.get("id"), "uploaded file ID")
         progress["file_id"] = file_id
+        if plan.gcode_model and uploaded.get("eligibility") != {"known": True, "model_uuids": [plan.gcode_model]}:
+            raise ThemisError("Themis did not confirm the G-code printer eligibility. No project items were added. Check the uploaded file before retrying.")
         if plan.action == "job":
             job = client.write_json("POST", "/jobs", plan.job_payload(file_id))
             progress["job_id"] = positive(job.get("id"), "created job ID")
@@ -31,6 +34,8 @@ def execute_send(client, snapshot, plan, send_id):
             group_id = positive(group.get("id"), "created print group ID")
             progress["group_id"] = group_id
             configured = client.write_json("PATCH", f"/projects/{project_id}/groups/{group_id}", plan.group_payload())
+            if plan.gcode_model and configured.get("targets") != plan.group_payload()["targets"]:
+                raise ThemisError("Themis did not confirm the G-code print group's eligible printers. No items were added. Check the import group before retrying.")
             if plan.overrides and configured.get("overrides") != plan.group_payload()["overrides"]:
                 raise ThemisError("Themis did not confirm the project overrides. No items were added. Check the created import group before retrying.")
             for payload in plan.item_payloads(file_id, group_id):

@@ -50,6 +50,10 @@ the compatibility authority for this repository. No community plugin code was co
   beneath the configured API base and refuses redirects. Do not advise full-access permission as a workaround.
 - **Slicing:** keep G-code hooks synchronous and make no `orca.host.ui.*` calls there. The UI can be waiting on the
   slicing worker. Capture context values and file bytes while they are valid; do not retain borrowed graph handles.
+  The pinned [slicing bridge](https://github.com/OrcaSlicer/OrcaSlicer/blob/40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19/src/slic3r/plugin/pluginTypes/slicingPipeline/SlicingPipelinePluginCapability.cpp)
+  exposes `ctx.config_value(key)` at `psGCodePostProcess`, falling back to the export's full config even though
+  `ctx.print` is null. Themis captures `printer_settings_id` from there, not the current GUI preset. The capture
+  capability performs local streaming I/O only; the panel initiates every upload separately.
 
 ## Verification performed
 
