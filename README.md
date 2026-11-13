@@ -7,8 +7,9 @@ This repository is the plugin workspace. The Themis backend remains in its own r
 Repository: [mgomezdev/themis-orca-plugin](https://github.com/mgomezdev/themis-orca-plugin).
 
 The BIZ-379 development wheel provides a docked Themis panel with masked URL/API-key settings,
-connection testing, current-plate display, and background reference-data loading. Plate sending
-is pending; see [the roadmap](docs/roadmap.md). Actual Orca host verification is deferred.
+connection testing, current-plate display, and background reference-data loading. The [send workflow](docs/send-workflows.md)
+creates geometry jobs or imports plates/objects into new/existing projects with printer, process and filament settings.
+See [the roadmap](docs/roadmap.md) for remaining G-code/history/eligibility work. Actual Orca host verification is deferred.
 
 ## Branches
 

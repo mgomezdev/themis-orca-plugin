@@ -10,6 +10,11 @@ BIZ-151 describes operators working in OrcaSlicer who send the current plate to 
 The plugin belongs beside the Prepare/Preview workspace, with three eventual send modes and explicit Use/Ignore
 choices for optional settings. Success means an operator can see which plate and connection are active before sending.
 
+The send workflow must offer a plate job; a plate or selected plate objects added to an existing project; and a plate
+or selected plate objects added to a new project. Each import can set eligible printers/models, process overrides,
+process preset, quantities, and filament rules. Project imports use their own group so prior project items retain
+their settings. Users review an inspected immutable copy; changes made afterward require another inspection.
+
 ## Reference and voice
 
 Follow the official v2.5.0 Dock Panel Demo and the source-verified patterns in docs/orca-2.5-reference.md.

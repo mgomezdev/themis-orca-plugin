@@ -13,7 +13,11 @@
   summary { cursor: pointer; padding: 4px 0; font-weight: 600; }
   form { display: grid; gap: 8px; margin-top: 10px; }
   label { display: grid; gap: 5px; }
-  input { box-sizing: border-box; width: 100%; min-width: 0; }
+  input, select, textarea { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; }
+  select[multiple] { min-height: 84px; }
+  input[type=checkbox] { width: auto; }
+  label.check { display: flex; align-items: center; gap: 6px; }
+  .fields { display: grid; gap: 8px; }
   button { cursor: pointer; }
   button:disabled { cursor: default; opacity: .6; }
   :focus-visible { outline: 2px solid var(--orca-accent); outline-offset: 2px; }
@@ -32,6 +36,42 @@
   <button id="refresh" type="button" disabled>Test connection &amp; refresh</button>
   <button id="cancel" type="button" class="quiet" hidden>Cancel refresh</button>
 </div>
+<section aria-labelledby="send-heading">
+  <h2 id="send-heading">Send to Themis</h2>
+  <button id="inspect" type="button">Inspect current plate</button>
+  <p id="snapshot-note" class="muted">Inspect a copy of the plate before choosing what to send.</p>
+  <p class="muted">Orca exports the full project archive. Only the chosen plate or objects become jobs/items; other plates remain in the uploaded library file.</p>
+  <form id="send-form">
+    <label>Action<select id="action">
+      <option value="job">Create a job for this plate</option>
+      <option value="existing_plate">Add plate to an existing project</option>
+      <option value="existing_objects">Add objects to an existing project</option>
+      <option value="new_plate">Add plate to a new project</option>
+      <option value="new_objects">Add objects to a new project</option>
+    </select></label>
+    <label id="project-row" hidden>Existing project<select id="project-id"></select></label>
+    <label id="name-row" hidden>New project name<input id="project-name" maxlength="255"></label>
+    <label id="objects-row" hidden>Objects from the inspected plate<select id="object-ids" multiple aria-describedby="snapshot-note"></select></label>
+    <label>Quantity<input id="quantity" type="number" min="1" max="10000" value="1"></label>
+    <details><summary>Printer and slicing settings</summary><div class="fields">
+      <label>Eligible printers and models<select id="targets" multiple></select></label>
+      <p class="muted">Choose Any printer alone, or specific printers/models. Project imports get their own print group; earlier items keep their settings.</p>
+      <label>Process preset<select id="process"></select></label>
+      <label class="check"><input id="use-filament" type="checkbox">Use a filament rule for imported items</label>
+      <div id="filament-fields" class="fields" hidden>
+        <label>Type<input id="filament-type" placeholder="PLA"></label>
+        <label>Subtype<input id="filament-subtype" placeholder="standard or any"></label>
+        <label>Color<input id="filament-color" placeholder="Leave blank for any color"></label>
+        <label>Manufacturer<input id="filament-manufacturer" placeholder="Leave blank for any vendor"></label>
+      </div>
+      <label class="check"><input id="use-overrides" type="checkbox">Use process overrides</label>
+      <label id="overrides-row" hidden>Overrides (JSON)<textarea id="overrides" rows="3" placeholder='{"layer_height": "0.2", "wall_loops": "3"}'></textarea></label>
+      <p id="override-note" class="muted">Process overrides apply to this send.</p>
+    </div></details>
+    <button id="send" type="submit" disabled>Send inspected copy</button>
+  </form>
+  <p id="send-result" role="status" aria-live="polite"></p>
+</section>
 <details id="settings" open>
   <summary>Connection settings</summary>
   <form id="settings-form">
@@ -50,14 +90,44 @@
   <dl id="counts" hidden></dl>
   <ul id="errors" hidden aria-label="Reference data errors"></ul>
 </section>
-<section><p class="muted">Sending plates is still in development.</p></section>
+<section><p class="muted">Plate jobs are sent as geometry for Themis to slice. Project items are added without generating jobs. Inspect again after editing the plate.</p></section>
 <script>
 (() => {
   const el = id => document.getElementById(id);
   let initialized = false;
   let keySet = false;
+  let latestState = {};
+  let choicesKey = '';
+  let snapshotKey = '';
+  el('action').value = 'job';
+  el('quantity').value = '1';
   const send = command => orca.postMessage({command});
+  const selected = id => Array.from(el(id).selectedOptions || [], option => option.value);
+  function options(id, rows, defaults = []) {
+    const previous = selected(id);
+    const wanted = previous.length ? previous : defaults;
+    const select = el(id); select.replaceChildren();
+    for (const [value, label] of rows) {
+      const option = document.createElement('option');
+      option.value = String(value); option.textContent = label; option.selected = wanted.includes(String(value));
+      select.append(option);
+    }
+  }
+  function controls() {
+    const action = el('action').value;
+    const job = action === 'job';
+    el('project-row').hidden = !action.startsWith('existing');
+    el('name-row').hidden = !action.startsWith('new');
+    el('objects-row').hidden = !action.endsWith('objects');
+    el('quantity').disabled = job || !!latestState.busy;
+    if (job) el('quantity').value = '1';
+    el('filament-fields').hidden = !el('use-filament').checked;
+    el('overrides-row').hidden = !el('use-overrides').checked;
+    el('override-note').textContent = (job ? 'Applies to this job. ' : 'Applies to this import group and its future jobs; earlier project items keep their settings. ') + 'Supported keys: layer_height, wall_loops, top_shell_layers, bottom_shell_layers, sparse_infill_density, sparse_infill_pattern, enable_support, support_type, support_threshold_angle, support_on_build_plate_only, raft_layers, brim_type, brim_width, ironing_type.';
+    el('send').disabled = !!latestState.busy || !latestState.snapshot || !latestState.choices || !latestState.configured || !!latestState.send_attempted;
+  }
   function render(state) {
+    latestState = state;
     if (!initialized) {
       el('url').value = state.url || '';
       initialized = true;
@@ -69,7 +139,7 @@
     el('status').textContent = state.status;
     el('notice').textContent = state.notice || '';
     el('refresh').disabled = !!state.busy || !state.configured;
-    el('cancel').hidden = !state.busy;
+    el('cancel').hidden = !state.busy || !!state.send_busy;
     for (const id of ['save', 'forget', 'url', 'api-key']) el(id).disabled = !!state.busy;
     el('forget').disabled = !!state.busy || !keySet;
     if (state.settings_saved) {
@@ -90,6 +160,31 @@
       const item = document.createElement('li'); item.textContent = message; errors.append(item);
     }
     errors.hidden = !errors.children.length;
+    const nextChoices = JSON.stringify(state.choices || null);
+    if (nextChoices !== choicesKey) {
+      choicesKey = nextChoices;
+      const choices = state.choices || {projects: [], printers: [], models: [], processes: []};
+      options('project-id', [['', 'Choose a project'], ...choices.projects.map(p => [p.id, p.name])]);
+      options('targets', [['any', 'Any printer'], ...choices.printers.map(p => [p.id, `Printer: ${p.name}`]), ...choices.models.map(m => [`model:${m.id}`, `Model: ${m.name}`])], ['any']);
+      options('process', [['', 'Ignore: let Themis decide'], ...choices.processes.map(name => [name, name])]);
+    }
+    const nextSnapshot = JSON.stringify(state.snapshot || null);
+    if (nextSnapshot !== snapshotKey) {
+      snapshotKey = nextSnapshot;
+      const objects = state.snapshot ? state.snapshot.objects : [];
+      options('object-ids', objects.map(o => [o.id, `${o.name} (${o.instances} instance(s))`]), objects.map(o=>o.id));
+    }
+    el('snapshot-note').textContent = state.snapshot ? `Inspected plate ${state.snapshot.plate_number}: ${state.snapshot.objects.length} object(s). This copy will be sent; inspect again after edits.` : 'Inspect a copy of the plate before choosing what to send.';
+    el('inspect').disabled = !!state.busy;
+    for (const id of ['action','project-id','project-name','object-ids','targets','process','use-filament','filament-type','filament-subtype','filament-color','filament-manufacturer','use-overrides','overrides']) el(id).disabled = !!state.busy;
+    const created = state.send_result ? state.send_result.created || {} : {};
+    const records = [];
+    if (created.job_id) records.push(`Job #${created.job_id}`);
+    if (created.project_id) records.push(`Project #${created.project_id}`);
+    if (created.group_id) records.push(`Import group #${created.group_id}`);
+    if (created.item_ids && created.item_ids.length) records.push(`Item(s) ${created.item_ids.map(id=>'#'+id).join(', ')}`);
+    el('send-result').textContent = state.send_result ? [state.send_result.message, ...records].join(' ') : '';
+    controls();
   }
   orca.onMessage(message => {
     if (message && message.type === 'state') render(message);
@@ -101,6 +196,21 @@
   el('refresh').addEventListener('click', () => send('refresh'));
   el('cancel').addEventListener('click', () => send('cancel'));
   el('forget').addEventListener('click', () => send('forget'));
+  el('inspect').addEventListener('click', () => send('inspect'));
+  for (const id of ['action','use-filament','use-overrides']) el(id).addEventListener('change', controls);
+  el('send-form').addEventListener('submit', event => {
+    event.preventDefault();
+    let overrides = {};
+    if (el('use-overrides').checked) {
+      try { overrides = JSON.parse(el('overrides').value || '{}'); }
+      catch (_) { el('notice').textContent = 'Overrides must be a JSON object, for example {"layer_height":"0.2"}.'; return; }
+    }
+    orca.postMessage({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
+      project_name:el('project-name').value, object_ids:selected('object-ids'), quantity:el('quantity').value,
+      targets:selected('targets'), process:el('process').value || '', use_filament:!!el('use-filament').checked,
+      filament_type:el('filament-type').value, filament_subtype:el('filament-subtype').value,
+      filament_color:el('filament-color').value, filament_manufacturer:el('filament-manufacturer').value, overrides}});
+  });
   send('ready');
   const timer = setInterval(() => send('poll'), 750);
   window.addEventListener('pagehide', () => clearInterval(timer));

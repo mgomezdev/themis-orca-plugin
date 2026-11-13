@@ -16,6 +16,7 @@ function page() {
     append(...children) { this.children.push(...children); }
     fire(name) { this.handlers[name]({preventDefault() {}}); }
     set innerHTML(_) { throw Error('Untrusted content must use textContent'); }
+    get selectedOptions() { return this.children.filter(child => child.selected); }
   }
   const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
@@ -89,4 +90,32 @@ test('connect, cancel and forget are explicit commands; forgotten key disables r
   p.state({key_set: false, configured: false, settings_saved: true});
   assert.equal(p.elements.refresh.disabled, true);
   assert.equal(p.elements.forget.disabled, true);
+});
+
+test('all five send destinations expose the correct project and object fields', () => {
+  const p = page();
+  p.state({choices:{projects:[{id:7,name:'P'}],printers:[{id:5,name:'Printer'}],models:[],processes:['Standard']},
+    snapshot:{plate_number:2,objects:[{id:'17',name:'Part',instances:2}]}});
+  for (const action of ['job','existing_plate','existing_objects','new_plate','new_objects']) {
+    p.elements.action.value = action; p.elements.action.fire('change');
+    assert.equal(p.elements['project-row'].hidden, !action.startsWith('existing'));
+    assert.equal(p.elements['name-row'].hidden, !action.startsWith('new'));
+    assert.equal(p.elements['objects-row'].hidden, !action.endsWith('objects'));
+  }
+  p.elements['project-name'].value = 'New project';
+  p.elements['send-form'].fire('submit');
+  assert.equal(p.messages.at(-1).workflow.action, 'new_objects');
+  assert.deepEqual(p.messages.at(-1).workflow.object_ids, ['17']);
+  assert.deepEqual(p.messages.at(-1).workflow.targets, ['any']);
+});
+
+test('project overrides stay selected and explain their import-group scope', () => {
+  const p = page(); p.state({choices:{projects:[],printers:[],models:[],processes:[]},snapshot:{plate_number:1,objects:[]}});
+  p.elements.action.value = 'new_plate';
+  p.elements['use-overrides'].checked = true;
+  p.elements.overrides.value = '{"wall_loops":3}';
+  p.elements.action.fire('change');
+  assert.equal(p.elements.send.disabled, false);
+  assert.equal(p.elements.overrides.value, '{"wall_loops":3}');
+  assert.match(p.elements['override-note'].textContent, /import group/);
 });

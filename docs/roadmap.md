@@ -11,6 +11,12 @@ The user selected a standalone `orca-plugin` repository, superseding the earlier
 4. BIZ-382: per-target preset differences and ordered printer preferences.
 5. BIZ-383: persist send identity and update previous sends.
 
+The send form now implements five geometry workflows: create a plate job, add a plate/objects to an existing project,
+and add a plate/objects to a new project. Import-specific groups carry printer/model eligibility, process preset and
+curated overrides; item asks carry filament type/subtype/color/vendor. New projects start in planning and project imports
+do not automatically generate jobs. The companion Themis group-overrides extension and migration 68 must be deployed for
+project overrides; the plugin checks its schema before making any writes.
+
 ## Backend dependencies (Themis repository)
 
 - BIZ-375: footprint eligibility.
