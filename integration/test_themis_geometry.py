@@ -13,18 +13,45 @@ from test_themis_gcode import api_for
 from themis_orca.references import References
 from themis_orca.send import execute_send
 from themis_orca.workflow import build_plan
+from themis_orca.presets import capture_presets
+from themis_orca.material import split_material
+from app.services.filament_tuple import split_type
+
+
+@pytest.mark.parametrize("raw", ["PLA", "PLA+", "PLA-Silk", "PETG CF", "PA6-GF", "PC-ABS",
+    "PLA High Flow", "PLA Carbon Fiber", "PLA Basic", "PLA experimental", "PETG/PLA", "", None])
+def test_orca_material_translation_matches_backend_contract(raw):
+    assert split_material(raw) == split_type(raw)
 
 
 @pytest.mark.asyncio
-async def test_plate_job_footprint_target_settings_replay_and_started_job_protection(client,create_printer,session_factory,tmp_path):
+@pytest.mark.parametrize("material,expected", [
+    ("PLA", ("PLA", "standard")), ("PLA+", ("PLA", "plus")),
+    ("PLA-Silk", ("PLA", "silk")), ("PETG-CF", ("PETG", "cf")),
+    ("PC-ABS", ("PC-ABS", "standard")),
+])
+async def test_plate_job_footprint_target_settings_replay_and_started_job_protection(client,create_printer,session_factory,tmp_path,material,expected):
     small = await create_printer(name="Small",bed_x_mm=256,bed_y_mm=256)
     big = await create_printer(name="Big",bed_x_mm=350,bed_y_mm=350)
     refs = References(printers=(await client.get("/api/v1/printers")).json(),
         catalog={"process":[{"name":"Standard"}],"filament":[{"name":"Generic PLA"}]})
     source = tmp_path/"export.3mf"; source.write_bytes(make_3mf_bytes())
     snapshot = SimpleNamespace(path=source,plate_number=1,objects=(),min_bed_mm={"x":300,"y":300,"z":100})
+    # Assume Orca slicing/host bindings supply this snapshot; keep preset capture,
+    # payload building, serializers, API, eligibility and database persistence real.
+    def preset(name, **values):
+        return SimpleNamespace(name=name,is_system=True,config_keys=lambda:list(values),config_value=values.get)
+    process, machine = preset("Standard"), preset("Machine")
+    filament = preset("Generic PLA",filament_vendor=["Fixture vendor"])
+    bundle = SimpleNamespace(current_process_preset=lambda:process,current_printer_preset=lambda:machine,
+        prints=SimpleNamespace(find_preset=lambda name:process),printers=SimpleNamespace(find_preset=lambda name:machine),
+        filaments=SimpleNamespace(find_preset=lambda name:filament,edited_preset=lambda:filament),
+        current_filament_presets=lambda:[filament],
+        full_config_value=lambda key:{"filament_type":[material],"filament_colour":["#112233"]}[key])
+    ask = capture_presets(bundle)["filaments"][0]["ask"]
+    assert (ask["filament_type"],ask["filament_subtype"]) == expected
     settings = {"action":"job","process":"Standard","targets":["any"],"target_overrides":{"any":{"wall_loops":"4"}},
-        "preference":[str(big)],"filament_map":[{"model_filament":1,"filament_type":"PLA","filament_subtype":"any","filament_profile":"Generic PLA"}]}
+        "preference":[str(big)],"filament_map":[{**ask,"filament_profile":"Generic PLA"}]}
     plan = build_plan(settings,snapshot,refs)
     api = api_for(client); sid = str(uuid4()); saved = []
     library,cache = tmp_path/"library",tmp_path/"filecache"; library.mkdir(); cache.mkdir()
@@ -40,6 +67,7 @@ async def test_plate_job_footprint_target_settings_replay_and_started_job_protec
             assert [c.printer_id for c in configs] == [big]
             assert configs[0].overrides == {"wall_loops":"4"}
             assert configs[0].filament_map[0]["filament_profile"] == "Generic PLA"
+            assert configs[0].filament_map[0] == {**ask,"filament_profile":"Generic PLA","tool_index":None}
             job = await s.get(Job,jid)
             assert job.min_bed_mm == snapshot.min_bed_mm
             original_file = job.uploaded_file_id

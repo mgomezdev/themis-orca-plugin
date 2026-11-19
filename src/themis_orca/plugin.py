@@ -224,6 +224,8 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 warnings.append(warning)
             filaments = []
             for filament in self.preset_data["filaments"]:
+                if filament.get("material_warning"):
+                    warnings.append(filament["material_warning"])
                 profile,warning = catalog_choice(filament,self.references.catalog.get("filament",[]))
                 if warning:
                     warnings.append(warning)

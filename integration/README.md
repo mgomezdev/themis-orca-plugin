@@ -17,3 +17,9 @@ python -m pytest -c pyproject.toml -p tests.conftest C:/path/to/themis-orca-plug
 
 The plugin source path is derived from this test file. Fixtures create temporary databases and artifact folders;
 this suite does not use a user's configured server or communicate with a real printer.
+
+Geometry cases assume Orca supplies the sliced/exported plate and preset bindings. They run the real preset capture
+and material translation through job submission, bed eligibility, DB persistence, replay and started-job protection
+for plain, plus, silk, carbon-fiber and blended materials. A contract matrix compares the wheel's material parser
+with the pinned backend parser. These cases are automatically collected by the existing `themis-api-contract` CI job;
+they do not execute Orca or prove its native bindings. No workflow change is needed for collection.

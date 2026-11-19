@@ -42,6 +42,11 @@ Each import gets a dedicated configured group. New projects start in planning; g
 
 - Process preset can be a catalog name or Ignore. Inherited user presets fall back to a matching parent/system name and are flagged. Missing/cyclic inheritance is reported.
 - **Use per-filament requirements from Orca** includes type/subtype/color/vendor per model filament. Review/edit the JSON for the selected plate.
+  Material variants follow Themis's matching rules: `PLA+` → `PLA / plus`, `PETG-CF` → `PETG / cf`,
+  plain `PLA` → `PLA / standard`; blends such as `PC-ABS` remain intact. Other explicit suffixes are
+  preserved as lowercase subtypes. Display names are not parsed: a preset named “Silk” whose material
+  field says only `PLA` produces `standard`, so review the subtype before using it. Missing material
+  is flagged for review. Choose `any` explicitly when every subtype is acceptable, or Ignore the requirements.
 - **Use per-filament catalog presets** independently includes profile names. Ignoring either omits those fields. A single filament rule is also available; it supplies defaults for each map entry, with explicit per-filament fields taking precedence.
 - Common process overrides default to edited-preset differences against the stored system parent, including unsaved process edits. Supported keys follow the provider's curated contract. Unsupported differences are listed and not copied.
 - Individual target overrides are JSON keyed by eligible picker keys, e.g. `{"5":{"wall_loops":"4"}}`. They win over common overrides, which win over printer defaults. Unknown/non-finite/container values are rejected; effective settings enter cache keys.
