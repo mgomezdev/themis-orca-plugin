@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 
 from .workflow import OVERRIDE_KEYS, WorkflowError
+from .material import split_material
 
 
 def diff_configs(current, parent):
@@ -66,10 +67,13 @@ def capture_presets(bundle):
             preset = edited
         row = preset_snapshot(preset,bundle.filaments)
         values = row["values"]
+        material, subtype = split_material(types[index] if index < len(types) else None)
         row["model_filament"] = index+1
-        row["ask"] = {"model_filament":index+1,"filament_type":types[index] if index < len(types) else "",
-                      "filament_subtype":"any","filament_color":colors[index] if index < len(colors) else "",
+        row["ask"] = {"model_filament":index+1,"filament_type":material or "",
+                      "filament_subtype":subtype or "","filament_color":colors[index] if index < len(colors) else "",
                       "filament_manufacturer":split_values(values.get("filament_vendor"))[0]}
+        row["material_warning"] = (f"Filament {index+1}: Orca reports no material. Review type/subtype before using these requirements."
+                                   if material is None else "")
         filaments.append(row)
     return {"machine":machine,"process":process,"filaments":filaments}
 
