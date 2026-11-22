@@ -6,10 +6,10 @@ const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '../src/themis_orca/panel.html'), 'utf8');
 const workspaceHtml = fs.readFileSync(path.join(__dirname, '../src/themis_orca/workspace.html'), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const fleetHtml = fs.readFileSync(path.join(__dirname, '../src/themis_orca/fleet.html'), 'utf8');
 
 // Small DOM/host bridge contract harness. Browser layout is verified separately.
-function page({workspace = false, confirm = () => true} = {}) {
+function page({workspace = false, fleet = false, confirm = () => true} = {}) {
   class Element {
     constructor() { this.value = ''; this.textContent = ''; this.children = []; this.handlers = {}; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
@@ -21,9 +21,12 @@ function page({workspace = false, confirm = () => true} = {}) {
     set innerHTML(_) { throw Error('Untrusted content must use textContent'); }
     get selectedOptions() { return this.children.filter(child => child.selected); }
   }
-  const ids = [...(workspace ? html + workspaceHtml : html).matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  const markup = fleet ? fleetHtml : html + (workspace ? workspaceHtml : '');
+  const script = markup.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const ids = [...markup.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
   if (workspace) elements['projects-workspace'].dataset = {token: 'local-token'};
+  if (fleet) elements['fleet-workspace'].dataset = {token: 'fleet-token'};
   const messages = [], handlers = {};
   let receive, tick, cleared = false;
   vm.runInNewContext(script, {
@@ -34,8 +37,30 @@ function page({workspace = false, confirm = () => true} = {}) {
     clearInterval: id => { assert.equal(id, 1); cleared = true; },
   });
   const state = overrides => receive({type: 'state', status: 'Ready', url: 'https://themis.test/api/v1', configured: true, key_set: true, plate_index: 0, busy: false, ...overrides});
-  return {elements, messages, handlers, state, tick: () => tick(), cleared: () => cleared};
+  return {elements, messages, handlers, state, receive, tick: () => tick(), cleared: () => cleared};
 }
+
+test('fleet tab switches between live fleet and camera wall and closes the active view', () => {
+  const p = page({fleet: true});
+  const frame = p.elements['fleet-frame'];
+  assert.deepEqual(p.messages, [{command: 'ready', page_token: 'fleet-token'}]);
+  assert.match(fleetHtml, /sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"/);
+  p.receive({type: 'state', status: 'Choose Fleet or Camera Wall.'});
+  assert.equal(frame.src, undefined);
+  p.elements['open-fleet'].fire('click');
+  p.receive({type: 'view', view: 'fleet', url: 'https://themis.test/fleet'});
+  assert.equal(frame.src, 'https://themis.test/fleet');
+  p.elements['open-wall'].fire('click');
+  assert.deepEqual(p.messages.at(-1), {command: 'open', view: 'wall', page_token: 'fleet-token'});
+  p.receive({type: 'view', view: 'wall', url: 'https://themis.test/wall'});
+  assert.equal(frame.src, 'https://themis.test/wall');
+  assert.equal(frame.title, 'Themis Camera Wall');
+  p.elements['close-view'].fire('click');
+  assert.equal(frame.src, undefined);
+  assert.equal(frame.hidden, true);
+  p.receive({type: 'view', view: 'wall', url: 'https://themis.test/wall'});
+  assert.equal(frame.src, undefined);
+});
 
 test('project tab opens the real app and routes an import to its editor without navigating on polls', () => {
   let allowNavigation = false;

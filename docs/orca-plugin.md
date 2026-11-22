@@ -50,6 +50,13 @@ The tab loads the deployed Themis frontend. The configured deployment must serve
 embedding in Orca's WebView. The plugin API key stays in Orca's capability configuration.
 Track this workflow and native acceptance in [BIZ-393](https://linear.app/deviant-mushroom/issue/BIZ-393).
 
+## Monitor the fleet
+
+Open the **Themis Fleet** tab and choose **Fleet** for printer status or **Camera Wall** for the camera grid.
+If Orca shows only one plugin tab, choose **Themis Fleet** from its tab overflow menu.
+The tab uses the same Themis URL as the project builder and the usual Themis web sign-in. Choose **Close view**
+to stop the embedded camera streams when you are done monitoring. See [BIZ-394](https://linear.app/deviant-mushroom/issue/BIZ-394).
+
 The expert Config tab accepts `{"url":"https://themis.example.test","api_key":"YOUR_API_KEY"}`.
 Its JSON editor displays the key; avoid sharing that configuration. The panel never reads a stored key back into its page.
 The key is retained in host-managed plugin configuration, without additional plugin encryption.

@@ -136,7 +136,8 @@ def opened(adapter):
 
 def test_registration_preserves_identity_and_requests_only_thread_permission(adapter):
     adapter.plugin.ThemisPlugin().register_capabilities()
-    assert adapter.registrations == [adapter.plugin.TestConnection, adapter.plugin.CaptureGCode, adapter.plugin.ProjectsPage]
+    assert adapter.registrations == [adapter.plugin.TestConnection, adapter.plugin.CaptureGCode,
+                                     adapter.plugin.ProjectsPage, adapter.plugin.FleetPage]
     adapter.host.request_permissions.assert_called_once_with(threading=True)
     assert adapter.script.get_name() == "Themis: Test connection"
     assert adapter.script.get_default_config() == {"url": "", "api_key": ""}
@@ -149,6 +150,31 @@ def projects_page(adapter):
     assert 'id="projects-frame"' in html
     assert "private-key" not in html
     return page, lambda command, **data: page.on_message({"page_token": page._page_token, "command": command, **data})
+
+
+def test_fleet_page_routes_only_to_configured_fleet_and_wall_without_the_api_key(adapter):
+    page = adapter.plugin.FleetPage()
+    html = page.get_ui()
+    token = page._page_token
+    assert page.get_name() == "Themis Fleet"
+    assert token in html
+    assert "private-key" not in html
+    page.on_message({"command": "open", "view": "wall"})
+    page.on_message({"command": "open", "view": "https://elsewhere.test", "page_token": token})
+    page.on_message({"command": "open", "view": [], "page_token": token})
+    page.on_message({"command": "forget", "page_token": token})
+    assert page.posts == []
+    adapter.script.raw_config = '{"url":"https://themis.test/prefix/api/v1","api_key":"private-key"}'
+    for view, path in (("fleet", "/fleet"), ("wall", "/wall")):
+        page.on_message({"command": "open", "view": view, "page_token": token, "url": "https://elsewhere.test"})
+        assert page.posts[-1] == {"type": "view", "view": view, "url": "https://themis.test/prefix" + path}
+    adapter.script.raw_config = '{"url":"javascript:alert(1)"}'
+    page.on_message({"command": "open", "view": "wall", "page_token": token})
+    assert "Save your Themis URL" in page.posts[-1]["status"]
+    assert "private-key" not in json.dumps(page.posts)
+    page.on_unload()
+    page.on_message({"command": "open", "view": "wall", "page_token": token})
+    assert len(page.posts) == 3
 
 
 def test_projects_page_shares_configuration_and_rejects_missing_or_stale_token(adapter):

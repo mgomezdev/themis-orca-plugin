@@ -529,22 +529,16 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             TestConnection._active = None
 
 
-class ProjectsPage(orca.pages.PagesPluginCapabilityBase):
+class _ThemisPage(orca.pages.PagesPluginCapabilityBase):
     def __init__(self):
         super().__init__()
         self._page_token = None
-
-    def get_name(self):
-        return "Themis Projects"
 
     def get_ui(self):
         # Orca injects the top-level bridge. Require a per-document token as
         # well, since the WebView's native message handler may reach subframes.
         self._page_token = uuid4().hex
-        package = files("themis_orca")
-        panel = package.joinpath("panel.html").read_text(encoding="utf-8")
-        workspace = package.joinpath("workspace.html").read_text(encoding="utf-8")
-        return panel.replace("<!-- projects workspace -->", workspace.replace("PAGE_TOKEN", self._page_token))
+        return self._page_html(files("themis_orca")).replace("PAGE_TOKEN", self._page_token)
 
     def on_message(self, data):
         if not self._page_token or not isinstance(data, dict) or data.get("page_token") != self._page_token:
@@ -554,6 +548,22 @@ class ProjectsPage(orca.pages.PagesPluginCapabilityBase):
             self.post_message({"type": "state", "busy": True,
                                "status": "Enable Themis: Test connection in Orca’s Plugins dialog."})
             return
+        self._handle_message(data, session)
+
+    def on_unload(self):
+        self._page_token = None
+
+
+class ProjectsPage(_ThemisPage):
+    def get_name(self):
+        return "Themis Projects"
+
+    def _page_html(self, package):
+        panel = package.joinpath("panel.html").read_text(encoding="utf-8")
+        workspace = package.joinpath("workspace.html").read_text(encoding="utf-8")
+        return panel.replace("<!-- projects workspace -->", workspace)
+
+    def _handle_message(self, data, session):
         # The dock remains the entry point for standalone jobs.
         workflow = data.get("workflow")
         if data.get("command") == "send":
@@ -564,13 +574,38 @@ class ProjectsPage(orca.pages.PagesPluginCapabilityBase):
         session.handle_message(data, self.post_message)
 
     def on_unload(self):
-        self._page_token = None
+        super().on_unload()
         session = TestConnection._active() if TestConnection._active else None
         if session is not None:
             session.projects_page_attached = False
             if session.panel is None:
                 session.refresh.cancel()
                 session.sender.acknowledge(False)
+
+
+class FleetPage(_ThemisPage):
+    _routes = {"fleet": "/fleet", "wall": "/wall"}
+
+    def get_name(self):
+        return "Themis Fleet"
+
+    def _page_html(self, package):
+        return package.joinpath("fleet.html").read_text(encoding="utf-8")
+
+    def _handle_message(self, data, session):
+        command = data.get("command")
+        view = data.get("view")
+        if command != "ready" and (command != "open" or not isinstance(view, str) or view not in self._routes):
+            return
+        try:
+            api_url = api_base_url(session._config().get("url", ""))
+        except ValueError:
+            self.post_message({"type": "state", "status": "Save your Themis URL in Themis Projects or Connection settings."})
+            return
+        if command == "ready":
+            self.post_message({"type": "state", "status": "Choose Fleet or Camera Wall. Sign in to Themis if prompted."})
+        else:
+            self.post_message({"type": "view", "view": view, "url": api_url.removesuffix("/api/v1") + self._routes[view]})
 
 
 @orca.plugin
@@ -582,3 +617,4 @@ class ThemisPlugin(orca.base):
         orca.register_capability(TestConnection)
         orca.register_capability(CaptureGCode)
         orca.register_capability(ProjectsPage)
+        orca.register_capability(FleetPage)
