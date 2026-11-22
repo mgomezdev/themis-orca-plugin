@@ -27,6 +27,13 @@ def adapter(monkeypatch, tmp_path):
             self.raw_config = value
             return True
 
+    class PageCapability(Capability):
+        def __init__(self):
+            self.posts = []
+
+        def post_message(self, value):
+            self.posts.append(value)
+
     class Panel:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -106,6 +113,7 @@ def adapter(monkeypatch, tmp_path):
     host = SimpleNamespace(
         base=object, plugin=lambda cls: cls,
         script=SimpleNamespace(ScriptPluginCapabilityBase=Capability),
+        pages=SimpleNamespace(PagesPluginCapabilityBase=PageCapability),
         slicing=SimpleNamespace(SlicingPipelineCapabilityBase=Capability, Step=SimpleNamespace(psGCodePostProcess="export")),
         host=SimpleNamespace(ui=SimpleNamespace(create_dock_panel=create), model=Mock(return_value=model),
                              plugin=SimpleNamespace(storage=lambda: str(tmp_path)), plater=lambda: SimpleNamespace(export_3mf_copy=export,project_path=lambda:"")),
@@ -128,10 +136,71 @@ def opened(adapter):
 
 def test_registration_preserves_identity_and_requests_only_thread_permission(adapter):
     adapter.plugin.ThemisPlugin().register_capabilities()
-    assert adapter.registrations == [adapter.plugin.TestConnection, adapter.plugin.CaptureGCode]
+    assert adapter.registrations == [adapter.plugin.TestConnection, adapter.plugin.CaptureGCode, adapter.plugin.ProjectsPage]
     adapter.host.request_permissions.assert_called_once_with(threading=True)
     assert adapter.script.get_name() == "Themis: Test connection"
     assert adapter.script.get_default_config() == {"url": "", "api_key": ""}
+
+
+def projects_page(adapter):
+    page = adapter.plugin.ProjectsPage()
+    html = page.get_ui()
+    assert page.get_name() == "Themis Projects"
+    assert 'id="projects-frame"' in html
+    assert "private-key" not in html
+    return page, lambda command, **data: page.on_message({"page_token": page._page_token, "command": command, **data})
+
+
+def test_projects_page_shares_configuration_and_rejects_missing_or_stale_token(adapter):
+    page, enter = projects_page(adapter)
+    first_token = page._page_token
+    page.on_message({"command": "forget"})
+    page.get_ui()
+    page.on_message({"command": "forget", "page_token": first_token})
+    assert not page.posts
+    enter("ready")
+    assert page.posts[-1]["configured"]
+    assert "private-key" not in json.dumps(page.posts)
+    adapter.create.assert_not_called()
+    enter("save", url="https://other.test", api_key="")
+    assert json.loads(adapter.script.raw_config)["url"] == "https://other.test/api/v1"
+    assert json.loads(adapter.script.raw_config)["api_key"] == "private-key"
+
+
+@pytest.mark.parametrize("action", ["existing_plate", "existing_objects", "existing_gcode"])
+def test_projects_page_imports_sources_to_selected_project(adapter, tmp_path, action):
+    page, enter = projects_page(adapter)
+    script = adapter.script
+    script.references = References(projects=[{"id": 7, "name": "Existing"}], models=[{"id": "model-1"}])
+    script.connection = Connection("staff", False, ())
+    workflow = {"action": action, "project_id": 7, "object_ids": ["17"]}
+    if action == "existing_gcode":
+        path = tmp_path / "example.gcode"
+        path.write_bytes(b"G28\n")
+        adapter.plugin.CaptureGCode().execute(SimpleNamespace(step="export", gcode_path=str(path),
+            output_name="example.gcode", config_value=lambda key: "Profile"))
+        capture = adapter.plugin._captures.entries()[0][0]
+        workflow.update(capture_id=capture.token, gcode_model="model-1")
+    else:
+        enter("inspect")
+    enter("send", workflow={"action": "job"})
+    assert script.sender.starts == 0
+    enter("send", workflow=workflow)
+    assert script.sender.starts == 1, page.posts[-1]["notice"]
+    assert script.sender.plan.project_id == 7
+    assert script.sender.plan.action == action
+    assert json.loads(script.raw_config)["send_history"][script.pending_key]["state"] == "preparing"
+
+
+def test_projects_page_blocks_copy_from_another_project_on_the_same_plate(adapter):
+    page, enter = projects_page(adapter)
+    enter("inspect")
+    adapter.script.references = References()
+    adapter.script.connection = Connection("staff", False, ())
+    adapter.model.id = lambda: 123
+    enter("send", workflow={"action": "new_plate", "project_name": "Project"})
+    assert adapter.script.sender.starts == 0
+    assert "project or plate changed" in page.posts[-1]["notice"]
 
 
 def test_export_hook_captures_export_time_profile_and_bytes_without_ui_or_network(adapter, tmp_path):

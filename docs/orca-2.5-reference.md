@@ -11,6 +11,7 @@ The official source tree contains runnable, single-file sandbox examples:
 | Reference | Guidance for this plugin |
 | --- | --- |
 | [Dock Panel Demo](https://github.com/OrcaSlicer/OrcaSlicer/blob/40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19/sandboxes/orca_dock_panel_plugin_any.py) | A Script capability opens a host-owned dock panel, reuses an existing panel on subsequent runs, handles refresh/hide messages, and clears the handle on close. The page requests its initial data after installing its message listener. |
+| [Plugin Pages host](https://github.com/OrcaSlicer/OrcaSlicer/blob/40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19/src/slic3r/plugin/host/PluginPages.cpp) | A Pages capability provides HTML for a lazily built main-window tab. Orca handles page messages on the UI thread and exposes `post_message` for replies. |
 | [Orca Inspector](https://github.com/OrcaSlicer/OrcaSlicer/blob/40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19/sandboxes/orca_inspector_plugin_any.py) | Broader examples of model/preset inspection, explicit success/error replies, refresh-generation identifiers, and worker work initiated by UI message callbacks. |
 | [G-code Stamp](https://github.com/OrcaSlicer/OrcaSlicer/blob/40ecc66f78ed72dc368e0c1ebe40d77f00cc8a19/sandboxes/orca_gcode_stamp_plugin_any.py) | Checks `ctx.step == psGCodePostProcess` and uses `ctx.gcode_path`. This seam operates on export copies and may fire more than once for a slice. Themis must copy bytes rather than apply this sample's in-place text modification. |
 
