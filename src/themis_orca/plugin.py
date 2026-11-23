@@ -5,6 +5,7 @@ from importlib.resources import files
 from threading import Lock
 from pathlib import Path
 from uuid import uuid4
+from weakref import ref
 
 import orca
 
@@ -12,7 +13,7 @@ from .refresh import BackgroundRefresh
 from .settings import Settings, api_base_url
 from .send import BackgroundSend
 from .snapshot import inspect_snapshot, capture_footprint
-from .workflow import build_plan, WorkflowError
+from .workflow import ACTIONS, build_plan, WorkflowError
 from .gcode import CaptureStore, eligible_model, eligible_printers
 from .presets import capture_presets, catalog_choice, preset_snapshot
 from .history import capture_key, source_key, save_record
@@ -54,6 +55,8 @@ def _settings(raw):
 
 
 class TestConnection(orca.script.ScriptPluginCapabilityBase):
+    _active = None
+
     def __init__(self):
         super().__init__()
         self.panel = None
@@ -65,6 +68,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         self._open_lock = Lock()
         self.sender = BackgroundSend()
         self.snapshot = None
+        self.snapshot_source = None
         self.connection = None
         self.send_attempted = False
         self.send_result = None
@@ -73,15 +77,20 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         self.preset_error = ""
         self.pending_key = None
         self.history_selection = None
+        self.projects_page_attached = False
+        TestConnection._active = ref(self)
+
+    @staticmethod
+    def _plate_source():
+        model = orca.host.model()
+        return orca.host.plater().project_path(), model.id(), model.current_plate_index() + 1
 
     def _source_key(self, config):
-        url = api_base_url(config.get("url",""))
-        model = orca.host.model()
-        return source_key(url,orca.host.plater().project_path(),model.id(),model.current_plate_index()+1)
+        return source_key(api_base_url(config.get("url", "")), *self._plate_source())
 
     def _record(self, config, key=None):
         history = config.get("send_history") or {}
-        selected = self.history_selection or key
+        selected = key or self.history_selection
         if selected is None:
             try:
                 selected = self._source_key(config)
@@ -144,6 +153,11 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             record = {**record,"outcome":sent,"state":"sent" if sent.get("ok") else "uncertain" if sent.get("uncertain") else "conflict" if sent.get("conflict") else "failed"}
             if sent.get("ok"):
                 record.update(created=sent.get("created"),can_update=sent.get("can_update") is True,status=sent.get("status"))
+                request = record.get("request") or {}
+                project_id = (record["created"] or {}).get("project_id")
+                if (self.references is not None and project_id and request.get("project_name")
+                        and not any(project.get("id") == project_id for project in self.references.projects)):
+                    self.references.projects.append({"id": project_id, "name": request["project_name"]})
             if sent.get("conflict"):
                 record["can_update"] = False
             self.send_result = sent
@@ -290,7 +304,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             "preset_defaults":defaults,"preset_error":self.preset_error,
             "history":self._public_record(self._record(config)[1],self._record(config)[0]),"history_selected":bool(self.history_selection),
             "history_choice":self.history_selection or "",
-            "history_choices":[{"key":key,"label":r.get("label","Previous send"),"send_id":r.get("send_id"),"created":r.get("created")}
+            "history_choices":[{"key":key,"label":r.get("label","Previous send"),"send_id":r.get("send_id"),"created":r.get("created"),"kind":r.get("kind")}
                 for key,r in reversed(list((config.get("send_history") or {}).items())) if isinstance(r,dict) and r.get("server_url") == url],
             "snapshot": ({"plate_number": self.snapshot.plate_number, "objects": self.snapshot.objects,
                           "min_bed_mm": self.snapshot.min_bed_mm} if self.snapshot else None),
@@ -305,6 +319,9 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
     def on_message(self, data, generation):
         if generation != self._generation or self.panel is None:
             return
+        self.handle_message(data, self.panel.post)
+
+    def handle_message(self, data, reply):
         saved = False
         try:
             if not isinstance(data, dict):
@@ -326,6 +343,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 self.refresh.cancel()
                 self.references = None
                 self.connection = None
+                self.send_result = None
                 self.status = "Settings saved. Test the connection to load available data."
                 self.notice = ""
                 saved = True
@@ -339,6 +357,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 self.refresh.cancel()
                 self.references = None
                 self.connection = None
+                self.send_result = None
                 self.status = "API key removed. Enter a key in Connection settings to reconnect."
                 self.notice = ""
                 saved = True
@@ -393,6 +412,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                     raise PanelError("Open a plate in Prepare or Preview before inspecting it.")
                 path = Path(orca.host.plugin.storage()) / ("orca-plate-" + uuid4().hex + ".3mf")
                 try:
+                    source = self._plate_source()
                     orca.host.plater().export_3mf_copy(str(path))
                     snapshot = inspect_snapshot(path, plate + 1)
                     snapshot = capture_footprint(snapshot, orca.host.model())
@@ -405,6 +425,7 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                 if self.snapshot is not None:
                     self.snapshot.path.unlink(missing_ok=True)
                 self.snapshot = snapshot
+                self.snapshot_source = source
                 self.history_selection = None
                 try:
                     self.preset_data = capture_presets(orca.host.preset_bundle())
@@ -424,8 +445,8 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                     raise PanelError("Wait for the previous send result before starting another send.")
                 if not gcode and self.snapshot is None:
                     raise PanelError("Inspect the current plate before sending geometry.")
-                if not gcode and orca.host.model().current_plate_index() + 1 != self.snapshot.plate_number:
-                    raise PanelError("The selected plate changed. Inspect the current plate again before sending.")
+                if not gcode and self._plate_source() != self.snapshot_source:
+                    raise PanelError("The selected project or plate changed. Inspect the current plate again before sending.")
                 snapshot = _captures.acquire(workflow.get("capture_id"),allow_attempted=True) if gcode else self.snapshot
                 started = False
                 try:
@@ -445,8 +466,11 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
                     if record and disposition == "update" and (updating or record.get("state") in {"uncertain","conflict"}) and not record.get("can_update"):
                         raise PanelError("This send cannot be updated, or its status is uncertain. Refresh its status, retry its saved request, or choose Send as new.")
                     if disposition == "new" or record is None:
-                        if record:
-                            self._store_record(key+":"+record["send_id"],record)
+                        # Archive the entry being replaced at the current source,
+                        # even if the operator was reviewing another saved send.
+                        previous = (config.get("send_history") or {}).get(source)
+                        if previous:
+                            self._store_record(source+":"+previous["send_id"],previous)
                         key = source
                         self.history_selection = None
                         record = {"send_id":str(uuid4()),"server_url":url,"kind":"job" if plan.action in {"job","gcode_job"} else "project",
@@ -481,17 +505,18 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
             # network exception bodies, or arbitrary exception text there.
             self.notice = "Themis could not complete this action. Reopen the panel and retry."
         try:
-            self.panel.post(self._state(settings_saved=saved))
+            reply(self._state(settings_saved=saved))
         except Exception:
             # Teardown can race a page poll. Host owns the panel's lifetime.
             pass
 
     def on_close(self, generation):
         if generation == self._generation:
-            if self.refresh.busy:
-                self.status = "Refresh cancelled. Test the connection to reload reference data."
-            self.refresh.cancel()
-            self.sender.acknowledge(False)
+            if not self.projects_page_attached:
+                if self.refresh.busy:
+                    self.status = "Refresh cancelled. Test the connection to reload reference data."
+                self.refresh.cancel()
+                self.sender.acknowledge(False)
             self.panel = None
 
     def on_unload(self):
@@ -500,6 +525,87 @@ class TestConnection(orca.script.ScriptPluginCapabilityBase):
         self.sender.acknowledge(False)
         self.panel = None
         _captures.clear()
+        if TestConnection._active is not None and TestConnection._active() is self:
+            TestConnection._active = None
+
+
+class _ThemisPage(orca.pages.PagesPluginCapabilityBase):
+    def __init__(self):
+        super().__init__()
+        self._page_token = None
+
+    def get_ui(self):
+        # Orca injects the top-level bridge. Require a per-document token as
+        # well, since the WebView's native message handler may reach subframes.
+        self._page_token = uuid4().hex
+        return self._page_html(files("themis_orca")).replace("PAGE_TOKEN", self._page_token)
+
+    def on_message(self, data):
+        if not self._page_token or not isinstance(data, dict) or data.get("page_token") != self._page_token:
+            return
+        session = TestConnection._active() if TestConnection._active else None
+        if session is None:
+            self.post_message({"type": "state", "busy": True,
+                               "status": "Enable Themis: Test connection in Orca’s Plugins dialog."})
+            return
+        self._handle_message(data, session)
+
+    def on_unload(self):
+        self._page_token = None
+
+
+class ProjectsPage(_ThemisPage):
+    def get_name(self):
+        return "Themis Projects"
+
+    def _page_html(self, package):
+        panel = package.joinpath("panel.html").read_text(encoding="utf-8")
+        workspace = package.joinpath("workspace.html").read_text(encoding="utf-8")
+        return panel.replace("<!-- projects workspace -->", workspace)
+
+    def _handle_message(self, data, session):
+        # The dock remains the entry point for standalone jobs.
+        workflow = data.get("workflow")
+        if data.get("command") == "send":
+            action = workflow.get("action") if isinstance(workflow, dict) else None
+            if not isinstance(action, str) or action not in ACTIONS or action in {"job", "gcode_job"}:
+                return
+        session.projects_page_attached = True
+        session.handle_message(data, self.post_message)
+
+    def on_unload(self):
+        super().on_unload()
+        session = TestConnection._active() if TestConnection._active else None
+        if session is not None:
+            session.projects_page_attached = False
+            if session.panel is None:
+                session.refresh.cancel()
+                session.sender.acknowledge(False)
+
+
+class FleetPage(_ThemisPage):
+    _routes = {"fleet": "/fleet", "wall": "/wall"}
+
+    def get_name(self):
+        return "Themis Fleet"
+
+    def _page_html(self, package):
+        return package.joinpath("fleet.html").read_text(encoding="utf-8")
+
+    def _handle_message(self, data, session):
+        command = data.get("command")
+        view = data.get("view")
+        if command != "ready" and (command != "open" or not isinstance(view, str) or view not in self._routes):
+            return
+        try:
+            api_url = api_base_url(session._config().get("url", ""))
+        except ValueError:
+            self.post_message({"type": "state", "status": "Save your Themis URL in Themis Projects or Connection settings."})
+            return
+        if command == "ready":
+            self.post_message({"type": "state", "status": "Choose Fleet or Camera Wall. Sign in to Themis if prompted."})
+        else:
+            self.post_message({"type": "view", "view": view, "url": api_url.removesuffix("/api/v1") + self._routes[view]})
 
 
 @orca.plugin
@@ -510,3 +616,5 @@ class ThemisPlugin(orca.base):
         orca.request_permissions(threading=True)
         orca.register_capability(TestConnection)
         orca.register_capability(CaptureGCode)
+        orca.register_capability(ProjectsPage)
+        orca.register_capability(FleetPage)

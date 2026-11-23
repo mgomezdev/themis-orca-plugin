@@ -27,7 +27,22 @@
   dt, dd { margin: 0; } dd { font-variant-numeric: tabular-nums; }
   ul { padding-left: 18px; line-height: 1.45; }
   [hidden] { display: none !important; }
+  body:has(#projects-workspace) { padding: 0; }
+  #projects-layout:has(#projects-workspace) { display: grid; grid-template-columns: minmax(290px, 350px) minmax(0, 1fr); height: 100vh; }
+  #projects-layout:has(#projects-workspace) > aside { overflow: auto; padding: 12px; border-right: 1px solid var(--orca-border); }
+  #projects-workspace { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  #projects-workspace .actions { align-items: center; margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--orca-border); }
+  #projects-workspace > p { padding: 10px 12px; }
+  #projects-frame { display: block; flex: 1; width: 100%; min-height: 0; border: 0; }
+  @media (max-width: 700px) {
+    #projects-layout:has(#projects-workspace) { display: block; height: auto; }
+    #projects-layout:has(#projects-workspace) > aside { border-right: 0; border-bottom: 1px solid var(--orca-border); }
+    #projects-frame { flex: none; height: 75vh; }
+  }
 </style>
+<body>
+<div id="projects-layout">
+<aside aria-label="Orca import controls">
 <h1>Themis</h1>
 <p id="plate" class="muted">Waiting for plate information…</p>
 <p id="status" role="status" aria-live="polite">Configure your connection to get started.</p>
@@ -132,9 +147,17 @@
   <ul id="errors" hidden aria-label="Reference data errors"></ul>
 </section>
 <section><p class="muted">Plate jobs are sent as geometry for Themis to slice. Project items are added without generating jobs. Inspect again after editing the plate.</p></section>
+</aside>
+<!-- projects workspace -->
+</div>
 <script>
 (() => {
   const el = id => document.getElementById(id);
+  const workspace = el('projects-workspace');
+  const post = data => orca.postMessage(workspace ? {...data, page_token:workspace.dataset.token} : data);
+  let workspaceRoot = '';
+  let openedWorkspace = false;
+  let importedProject = null;
   let initialized = false;
   let keySet = false;
   let latestState = {};
@@ -143,14 +166,31 @@
   let capturesKey = '';
   let historyKey = '';
   let preferenceKeys = [];
-  el('action').value = 'job';
+  el('action').value = workspace ? 'existing_plate' : 'job';
+  if (workspace) {
+    el('action').querySelectorAll('option').forEach(option => {
+      if (option.value === 'job' || option.value === 'gcode_job') option.remove();
+    });
+    el('send-heading').textContent = 'Import from Orca';
+  }
   el('quantity').value = '1';
-  const send = command => orca.postMessage({command});
+  const send = command => post({command});
   const selected = id => Array.from(el(id).selectedOptions || [], option => option.value);
   const isGcode = action => action === 'gcode_job' || action.endsWith('gcode');
   function activeHistory() {
-    if (latestState.history_selected || !isGcode(el('action').value)) return latestState.history;
-    return ((latestState.captures || []).find(c => c.id === el('capture-id').value) || {}).history;
+    const record = latestState.history_selected || !isGcode(el('action').value) ? latestState.history
+      : ((latestState.captures || []).find(c => c.id === el('capture-id').value) || {}).history;
+    return workspace && record?.kind !== 'project' ? null : record;
+  }
+  function updateHistory() {
+    const record = activeHistory();
+    if (!workspace) return record;
+    // A new destination is a new send. Updating a saved import is only
+    // appropriate for the same project, or when explicitly recovering it.
+    const action = el('action').value;
+    if (action.startsWith('existing') && Number(el('project-id').value) === record?.created?.project_id) return record;
+    if (latestState.history_selected && !record?.created?.project_id && record?.state === 'preparing') return record;
+    return null;
   }
   function preferenceList() {
     const choices = latestState.choices || {printers:[],models:[]};
@@ -188,13 +228,14 @@
     const gcode = isGcode(action);
     const capture = (latestState.captures || []).find(c => c.id === el('capture-id').value);
     const history = activeHistory();
+    const update = updateHistory();
     el('geometry-source').hidden = gcode;
     el('geometry-settings').hidden = gcode;
     el('gcode-source').hidden = !gcode;
     const chosenModel = ((latestState.choices || {}).models || []).find(m=>m.id === el('gcode-model').value);
     el('gcode-note').textContent = capture ? (chosenModel ? `Printer profile: ${capture.profile}. Eligible model: ${chosenModel.name}. Matching printers now: ${(capture.printers || []).join(', ') || 'none registered'}.` : capture.error || 'Choose the printer model this G-code was sliced for.')
       + (capture.attempted ? ' This export was already submitted. Check Themis for its result.' : ' G-code is added as-is; slicing settings are already baked in.') : 'No export selected. Capture an export before sending.';
-    el('send').textContent = history ? 'Update previous send' : gcode ? 'Send captured G-code' : 'Send inspected copy';
+    el('send').textContent = update ? 'Update previous send' : gcode ? 'Send captured G-code' : 'Send inspected copy';
     el('project-row').hidden = !action.startsWith('existing');
     el('name-row').hidden = !action.startsWith('new');
     el('objects-row').hidden = !action.endsWith('objects');
@@ -206,18 +247,48 @@
     el('filament-map-row').hidden = !el('use-orca-materials').checked && !el('use-orca-presets').checked;
     el('override-note').textContent = (job ? 'Applies to this job. ' : 'Applies to this import group and its future jobs; earlier project items keep their settings. ') + 'Supported keys: layer_height, wall_loops, top_shell_layers, bottom_shell_layers, sparse_infill_density, sparse_infill_pattern, enable_support, support_type, support_threshold_angle, support_on_build_plate_only, raft_layers, brim_type, brim_width, ironing_type.';
     const unavailable = !!latestState.busy || !latestState.choices || !latestState.configured
+      || (workspace && action.startsWith('existing') && !el('project-id').value)
       || (gcode ? !capture || !el('gcode-model').value : !latestState.snapshot);
-    el('send').disabled = unavailable || !!history && !history.can_update && history.state !== 'preparing';
+    el('send').disabled = unavailable || !!update && !update.can_update && update.state !== 'preparing';
     el('new-send').disabled = unavailable;
-    el('new-send').hidden = !history;
+    el('new-send').hidden = !update;
     el('lookup-send').disabled = !!latestState.busy || !history;
     el('retry-send').disabled = !!latestState.busy || !history || !history.can_retry;
     el('history-note').textContent = history ? `Saved ${history.kind || 'work'}: ${history.created && history.created.job_id ? 'job #'+history.created.job_id : history.created && history.created.project_id ? 'project #'+history.created.project_id : 'pending'}. Last known status: ${history.status || history.state || 'unknown'}. ${history.can_update ? 'Inspect/capture the replacement source, then Update.' : 'Refresh status, retry a saved request, or Send as new.'}` : 'No saved send selected. A stable send identity is saved before uploading.';
     const created = history && history.created || {};
     const recordId = created.job_id || created.project_id;
-    el('history-open').hidden = !recordId;
-    if (recordId && Number.isInteger(recordId) && recordId > 0) el('history-open').href = (latestState.url || '').replace(/\/api\/v1\/?$/, '') + (created.job_id ? '/jobs/' : '/projects/') + recordId;
+    el('history-open').hidden = !!workspace || !recordId;
+    if (!workspace && recordId && Number.isInteger(recordId) && recordId > 0) el('history-open').href = (latestState.url || '').replace(/\/api\/v1\/?$/, '') + (created.job_id ? '/jobs/' : '/projects/') + recordId;
     preferenceList();
+  }
+  function showWorkspace(path) {
+    if (!workspaceRoot) return;
+    if (openedWorkspace && !window.confirm('Open this page in the project workspace? Save any draft changes there first.')) return;
+    const frame = el('projects-frame');
+    frame.src = workspaceRoot + path;
+    frame.hidden = false;
+    openedWorkspace = true;
+    el('workspace-note').hidden = true;
+  }
+  function renderWorkspace(state) {
+    const root = state.configured ? state.url.replace(/\/api\/v1\/?$/, '') : '';
+    if (root !== workspaceRoot) {
+      workspaceRoot = root;
+      openedWorkspace = false;
+      el('projects-frame').removeAttribute('src');
+      el('projects-frame').hidden = true;
+      el('workspace-note').hidden = false;
+    }
+    const result = state.send_result;
+    const savedProject = activeHistory()?.created?.project_id;
+    const id = state.history_selected ? savedProject : (result?.ok ? result.created?.project_id : null) || savedProject;
+    importedProject = Number.isSafeInteger(id) && id > 0 ? id : null;
+    el('browse-projects').disabled = !workspaceRoot;
+    el('new-project').disabled = !workspaceRoot;
+    el('edit-import').hidden = !workspaceRoot || !importedProject;
+    el('workspace-note').textContent = workspaceRoot
+      ? 'Open the project list or start a project. Sign in to the embedded Themis workspace if prompted.'
+      : 'Save your Themis connection settings to open the project workspace.';
   }
   function render(state) {
     latestState = state;
@@ -296,7 +367,8 @@
     const nextHistory = JSON.stringify(state.history_choices || []);
     if (nextHistory !== historyKey) {
       historyKey = nextHistory;
-      options('history-choice',[['','Current plate/export'],...(state.history_choices || []).map(h=>[h.key,h.label+' ('+h.send_id.slice(0,8)+')'])]);
+      const savedSends = (state.history_choices || []).filter(h => !workspace || h.kind === 'project');
+      options('history-choice',[['','Current plate/export'],...savedSends.map(h=>[h.key,h.label+' ('+h.send_id.slice(0,8)+')'])]);
     }
     el('history-choice').value = state.history_choice || '';
     for (const id of ['action','project-id','project-name','object-ids','targets','process','margin-mm','use-filament','filament-type','filament-subtype','filament-color','filament-manufacturer','use-overrides','overrides','use-orca-materials','use-orca-presets','filament-map','use-target-overrides','target-overrides','preference-add','preference-append','preference-strict','history-choice']) el(id).disabled = !!state.busy;
@@ -306,15 +378,18 @@
     if (created.project_id) records.push(`Project #${created.project_id}`);
     if (created.group_id) records.push(`Import group #${created.group_id}`);
     if (created.item_ids && created.item_ids.length) records.push(`Item(s) ${created.item_ids.map(id=>'#'+id).join(', ')}`);
-    el('send-result').textContent = state.send_result ? [state.send_result.message, ...records].join(' ') : '';
+    const message = workspace && state.send_result?.ok && created.project_id
+      ? 'Items added. Open the imported project to review and queue it.' : state.send_result?.message;
+    el('send-result').textContent = message ? [message, ...records].join(' ') : '';
     controls();
+    if (workspace) renderWorkspace(state);
   }
   orca.onMessage(message => {
     if (message && message.type === 'state') render(message);
   });
   el('settings-form').addEventListener('submit', event => {
     event.preventDefault();
-    orca.postMessage({command: 'save', url: el('url').value, api_key: el('api-key').value});
+    post({command: 'save', url: el('url').value, api_key: el('api-key').value});
   });
   el('refresh').addEventListener('click', () => send('refresh'));
   el('cancel').addEventListener('click', () => send('cancel'));
@@ -322,7 +397,7 @@
   el('show-key').addEventListener('change',()=> { el('api-key').type = el('show-key').checked ? 'text' : 'password'; });
   el('inspect').addEventListener('click', () => send('inspect'));
   el('clear-captures').addEventListener('click', () => send('clear_captures'));
-  for (const id of ['action','use-filament','use-overrides','use-orca-materials','use-orca-presets','use-target-overrides','gcode-model']) el(id).addEventListener('change', controls);
+  for (const id of ['action','project-id','use-filament','use-overrides','use-orca-materials','use-orca-presets','use-target-overrides','gcode-model']) el(id).addEventListener('change', controls);
   el('capture-id').addEventListener('change',() => {
     const capture = (latestState.captures || []).find(c=>c.id === el('capture-id').value);
     el('gcode-model').value = capture && capture.model_id || ''; controls();
@@ -338,14 +413,14 @@
     el('overrides').value = JSON.stringify(defaults.overrides,null,2);
     el('filament-map').value = JSON.stringify(defaults.filaments,null,2);
   });
-  el('history-choice').addEventListener('change',()=>orca.postMessage({command:'choose_history',key:el('history-choice').value}));
-  el('lookup-send').addEventListener('click',()=>orca.postMessage({command:'lookup_send',key:activeHistory() && activeHistory().key}));
-  el('retry-send').addEventListener('click',()=>orca.postMessage({command:'retry_send',key:activeHistory() && activeHistory().key}));
+  el('history-choice').addEventListener('change',()=>post({command:'choose_history',key:el('history-choice').value}));
+  el('lookup-send').addEventListener('click',()=>post({command:'lookup_send',key:activeHistory() && activeHistory().key}));
+  el('retry-send').addEventListener('click',()=>post({command:'retry_send',key:activeHistory() && activeHistory().key}));
   function submit(disposition) {
-    const history = activeHistory();
+    const history = updateHistory();
     const destination = {disposition:disposition || (history ? 'update' : 'new'),history_key:history && history.key};
     if (isGcode(el('action').value)) {
-      orca.postMessage({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
+      post({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
         project_name:el('project-name').value, capture_id:el('capture-id').value, gcode_model:el('gcode-model').value, associate_plate:!!el('associate-plate').checked, quantity:el('quantity').value,...destination}});
       return;
     }
@@ -363,7 +438,7 @@
         filamentMap = entries.map(entry=>Object.fromEntries(Object.entries(entry).filter(([key])=>key === 'model_filament' || (key === 'filament_profile' ? el('use-orca-presets').checked : el('use-orca-materials').checked))));
       }
     } catch (_) { el('notice').textContent = 'Check the target overrides and filament JSON before sending.'; return; }
-    orca.postMessage({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
+    post({command:'send', workflow:{action:el('action').value, project_id:el('project-id').value,
       project_name:el('project-name').value, object_ids:selected('object-ids'), quantity:el('quantity').value,
       targets:selected('targets'), process:el('process').value || '', margin_mm:el('margin-mm').value || '0', use_filament:!!el('use-filament').checked,
       filament_type:el('filament-type').value, filament_subtype:el('filament-subtype').value,
@@ -372,9 +447,17 @@
   }
   el('send-form').addEventListener('submit',event=> { event.preventDefault(); submit(); });
   el('new-send').addEventListener('click',()=>submit('new'));
+  if (workspace) {
+    el('browse-projects').addEventListener('click', () => showWorkspace('/projects'));
+    el('new-project').addEventListener('click', () => showWorkspace('/projects/new'));
+    el('edit-import').addEventListener('click', () => {
+      if (importedProject) showWorkspace(`/projects/${importedProject}/edit`);
+    });
+  }
   send('ready');
   const timer = setInterval(() => send('poll'), 750);
   window.addEventListener('pagehide', () => clearInterval(timer));
 })();
 </script>
+</body>
 </html>

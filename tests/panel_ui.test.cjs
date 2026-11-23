@@ -5,33 +5,108 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 const html = fs.readFileSync(path.join(__dirname, '../src/themis_orca/panel.html'), 'utf8');
-const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+const workspaceHtml = fs.readFileSync(path.join(__dirname, '../src/themis_orca/workspace.html'), 'utf8');
+const fleetHtml = fs.readFileSync(path.join(__dirname, '../src/themis_orca/fleet.html'), 'utf8');
 
 // Small DOM/host bridge contract harness. Browser layout is verified separately.
-function page() {
+function page({workspace = false, fleet = false, confirm = () => true} = {}) {
   class Element {
     constructor() { this.value = ''; this.textContent = ''; this.children = []; this.handlers = {}; }
     addEventListener(name, handler) { this.handlers[name] = handler; }
+    querySelectorAll() { return []; }
+    removeAttribute(name) { delete this[name]; }
     replaceChildren() { this.children = []; }
     append(...children) { this.children.push(...children); }
     fire(name) { this.handlers[name]({preventDefault() {}}); }
     set innerHTML(_) { throw Error('Untrusted content must use textContent'); }
     get selectedOptions() { return this.children.filter(child => child.selected); }
   }
-  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  const markup = fleet ? fleetHtml : html + (workspace ? workspaceHtml : '');
+  const script = markup.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const ids = [...markup.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
   const elements = Object.fromEntries(ids.map(id => [id, new Element()]));
+  if (workspace) elements['projects-workspace'].dataset = {token: 'local-token'};
+  if (fleet) elements['fleet-workspace'].dataset = {token: 'fleet-token'};
   const messages = [], handlers = {};
   let receive, tick, cleared = false;
   vm.runInNewContext(script, {
     document: {getElementById: id => elements[id], createElement: () => new Element()},
     orca: {postMessage: data => messages.push(JSON.parse(JSON.stringify(data))), onMessage: fn => receive = fn},
-    window: {addEventListener: (name, fn) => handlers[name] = fn},
+    window: {confirm, addEventListener: (name, fn) => handlers[name] = fn},
     setInterval: (fn, delay) => { assert.equal(delay, 750); tick = fn; return 1; },
     clearInterval: id => { assert.equal(id, 1); cleared = true; },
   });
   const state = overrides => receive({type: 'state', status: 'Ready', url: 'https://themis.test/api/v1', configured: true, key_set: true, plate_index: 0, busy: false, ...overrides});
-  return {elements, messages, handlers, state, tick: () => tick(), cleared: () => cleared};
+  return {elements, messages, handlers, state, receive, tick: () => tick(), cleared: () => cleared};
 }
+
+test('fleet tab switches between live fleet and camera wall and closes the active view', () => {
+  const p = page({fleet: true});
+  const frame = p.elements['fleet-frame'];
+  assert.deepEqual(p.messages, [{command: 'ready', page_token: 'fleet-token'}]);
+  assert.match(fleetHtml, /sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"/);
+  p.receive({type: 'state', status: 'Choose Fleet or Camera Wall.'});
+  assert.equal(frame.src, undefined);
+  p.elements['open-fleet'].fire('click');
+  p.receive({type: 'view', view: 'fleet', url: 'https://themis.test/fleet'});
+  assert.equal(frame.src, 'https://themis.test/fleet');
+  p.elements['open-wall'].fire('click');
+  assert.deepEqual(p.messages.at(-1), {command: 'open', view: 'wall', page_token: 'fleet-token'});
+  p.receive({type: 'view', view: 'wall', url: 'https://themis.test/wall'});
+  assert.equal(frame.src, 'https://themis.test/wall');
+  assert.equal(frame.title, 'Themis Camera Wall');
+  p.elements['close-view'].fire('click');
+  assert.equal(frame.src, undefined);
+  assert.equal(frame.hidden, true);
+  p.receive({type: 'view', view: 'wall', url: 'https://themis.test/wall'});
+  assert.equal(frame.src, undefined);
+});
+
+test('project tab opens the real app and routes an import to its editor without navigating on polls', () => {
+  let allowNavigation = false;
+  const p = page({workspace: true, confirm: () => allowNavigation});
+  const frame = p.elements['projects-frame'];
+  assert.deepEqual(p.messages, [{command: 'ready', page_token: 'local-token'}]);
+  assert.match(workspaceHtml, /sandbox="allow-scripts allow-forms allow-same-origin allow-downloads"/);
+  p.state({url: 'https://themis.test/prefix/api/v1'});
+  assert.equal(frame.src, undefined);
+  p.elements['new-project'].fire('click');
+  assert.equal(frame.src, 'https://themis.test/prefix/projects/new');
+  assert.equal(frame.hidden, false);
+  p.state({url: 'https://themis.test/prefix/api/v1', send_result: {ok: true, created: {project_id: 9}}});
+  assert.equal(frame.src, 'https://themis.test/prefix/projects/new');
+  assert.equal(p.elements['edit-import'].hidden, false);
+  p.elements['edit-import'].fire('click');
+  assert.equal(frame.src, 'https://themis.test/prefix/projects/new');
+  allowNavigation = true;
+  p.elements['edit-import'].fire('click');
+  assert.equal(frame.src, 'https://themis.test/prefix/projects/9/edit');
+  p.state({url: 'https://themis.test/prefix/api/v1'});
+  assert.equal(frame.src, 'https://themis.test/prefix/projects/9/edit');
+  p.state({url: 'https://other.test/api/v1'});
+  assert.equal(frame.src, undefined);
+  assert.equal(frame.hidden, true);
+});
+
+test('project tab uses a new send when importing to a different project', () => {
+  const p = page({workspace: true});
+  p.state({
+    choices: {projects: [{id: 7, name: 'New target'}, {id: 9, name: 'Previous target'}], printers: [], models: [], processes: []},
+    snapshot: {plate_number: 1, objects: [{id: '17', name: 'Part', instances: 1}]},
+    history: {kind: 'project', key: 'last-import', created: {project_id: 9}, state: 'sent', can_update: true},
+  });
+  p.elements['project-id'].value = '7';
+  p.elements['project-id'].fire('change');
+  p.elements['send-form'].fire('submit');
+  assert.equal(p.messages.at(-1).page_token, 'local-token');
+  assert.equal(p.messages.at(-1).workflow.project_id, '7');
+  assert.equal(p.messages.at(-1).workflow.disposition, 'new');
+  p.elements['project-id'].value = '9';
+  p.elements['project-id'].fire('change');
+  p.elements['send-form'].fire('submit');
+  assert.equal(p.messages.at(-1).workflow.disposition, 'update');
+  assert.equal(p.messages.at(-1).workflow.history_key, 'last-import');
+});
 
 test('page registers the listener and asks for state without connecting', () => {
   const p = page();

@@ -3,8 +3,9 @@
 The development wheel implements the [BIZ-151 workflows](send-workflows.md): plate jobs, plate/object project imports,
 raw sliced G-code jobs/project imports, target settings, footprint eligibility and persistent send recovery.
 It uses the official 2.5.0 examples reviewed in [the pinned source record](orca-2.5-reference.md).
-The Script capability retains its original **Themis: Test connection** name so existing host configuration survives upgrades.
-Running it opens or shows one host-owned dock on Prepare/Preview. There are no third-party runtime dependencies.
+The **Themis Projects** tab pairs the existing web project builder with Orca import controls.
+The **Themis: Test connection** script also opens a dock on Prepare/Preview for quick imports and standalone jobs.
+Both entry points share configuration and saved sends. There are no third-party runtime dependencies.
 
 ## Setup and checks
 
@@ -26,12 +27,35 @@ See [API contract verification](../integration/README.md) for the companion suit
 ## Installation and configuration
 
 1. Install the wheel from OrcaSlicer 2.5.0's Plugins dialog and activate it.
-2. Run **Themis: Test connection** to open the panel.
+2. Open the **Themis Projects** tab. For quick sends from Prepare/Preview, run **Themis: Test connection**.
 3. Expand **Connection settings**, enter the URL and paste the API key. Normal clipboard shortcuts are retained.
    **Show entered API key** allows reviewing/copying the entered value. Save clears and remasks the field.
    A blank field preserves the stored key; **Forget API key** removes it. Saving makes no network request.
 4. Choose **Test connection & refresh**. If Orca prompts for the configured endpoint, grant access and retry.
 5. Review the source, destination and optional settings before sending. See [the workflow guide](send-workflows.md).
+
+## Build and queue a project
+
+1. In **Themis Projects**, choose **Projects** to open an existing project or **New project** to create one. Sign in
+   if the embedded Themis workspace prompts you. It uses the usual web sign-in and keeps its own browser session.
+2. To import geometry, inspect the current Orca plate and choose either the entire plate or individual objects.
+   For sliced G-code, enable **Themis: Capture G-code** in the Orca process preset, export G-code and select the
+   captured export. Review the printer model and quantity.
+3. Choose an existing project or enter a new project name in the import form, then send. If you created a project
+   in the embedded builder, save its draft and refresh Themis data in the import controls to add it to the picker.
+4. Choose **Open imported project** to see the saved items and print group in the builder. Save any draft edits
+   before reopening a project. Use **Review** and **Queue project** in the builder when the work is ready.
+
+The tab loads the deployed Themis frontend. The configured deployment must serve the project pages and allow
+embedding in Orca's WebView. The plugin API key stays in Orca's capability configuration.
+Track this workflow and native acceptance in [BIZ-393](https://linear.app/deviant-mushroom/issue/BIZ-393).
+
+## Monitor the fleet
+
+Open the **Themis Fleet** tab and choose **Fleet** for printer status or **Camera Wall** for the camera grid.
+If Orca shows only one plugin tab, choose **Themis Fleet** from its tab overflow menu.
+The tab uses the same Themis URL as the project builder and the usual Themis web sign-in. Choose **Close view**
+to stop the embedded camera streams when you are done monitoring. See [BIZ-394](https://linear.app/deviant-mushroom/issue/BIZ-394).
 
 The expert Config tab accepts `{"url":"https://themis.example.test","api_key":"YOUR_API_KEY"}`.
 Its JSON editor displays the key; avoid sharing that configuration. The panel never reads a stored key back into its page.
